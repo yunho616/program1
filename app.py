@@ -91,24 +91,13 @@ with col1:
         st.info("💡 위의 **[▶️ 지문 읽기 시작]** 버튼을 누르면 실시간 타이머가 작동합니다.")
 
     st.markdown("---")
-    st.subheader("🎙️ 3단계: 녹음 실행 및 데이터 제어")
+    st.subheader("🎙️ 3단계: 녹음 시작 및 녹음 시간 확인")
 
-    col_rec1, col_rec2 = st.columns([2, 1])
-    with col_rec1:
-        st.write("지문 파악이 끝나면 아래 버튼으로 녹음을 진행하세요.")
-    with col_rec2:
-        if st.button("🗑️ 데이터 초기화", use_container_width=True):
-            st.session_state.prep_start_time = None
-            st.session_state.latency = None
-            st.session_state.recording_completed = False
-            st.session_state.recording_duration = 0.0
-            st.session_state.reset_trigger += 1
-            st.rerun()
-
-    # 녹음 버튼 및 최종 측정 시간 칸
+    # [녹음 시작 버튼]과 [녹음 시간]을 가로로 정확히 나란히 배치
     col_mic, col_dur = st.columns([1, 1])
 
     with col_mic:
+        st.caption("👇 아래 버튼을 눌러 녹음을 진행하세요")
         audio = mic_recorder(
             start_prompt="▶️ 녹음 시작",
             stop_prompt="⏹️ 녹음 정지",
@@ -118,15 +107,24 @@ with col1:
     with col_dur:
         if st.session_state.recording_completed:
             st.metric(
-                label="📊 최종 녹음된 음성 길이",
+                label="⏱️ 녹음 시간",
                 value=f"{st.session_state.recording_duration} 초",
             )
         else:
             st.metric(
-                label="📊 최종 녹음된 음성 길이",
-                value="대기 중...",
-                help="[녹음 정지] 후 최종 오디오 데이터의 길이가 수치로 확정됩니다.",
+                label="⏱️ 녹음 시간",
+                value="0.0 초",
+                help="[녹음 정지]를 누르면 실제 녹음된 시간이 여기에 측정됩니다.",
             )
+
+    # 데이터 초기화 버튼
+    if st.button("🗑️ 전체 데이터 초기화", use_container_width=True):
+        st.session_state.prep_start_time = None
+        st.session_state.latency = None
+        st.session_state.recording_completed = False
+        st.session_state.recording_duration = 0.0
+        st.session_state.reset_trigger += 1
+        st.rerun()
 
     # 녹음 완료 후 오디오 바이너리 수신 및 시간 계산
     if audio:
