@@ -1,5 +1,5 @@
 streamlit
-audio-recorder-streamlit
+streamlit-mic-recorder
 praat-parselmouth
 pandas
 pydub
