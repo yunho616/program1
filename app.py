@@ -3,6 +3,7 @@ import time
 import wave
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from streamlit_mic_recorder import mic_recorder
 
 # 1. 페이지 기본 설정
@@ -75,12 +76,12 @@ with col1:
         st.info(f"⏳ 준비 시작 후 경과 시간: **{elapsed_prep}초**")
 
     st.markdown("---")
-    st.subheader("🎙️ 3단계: 녹음 및 데이터 제어")
+    st.subheader("🎙️ 3단계: 녹음 및 실시간 타이머")
 
     col_rec1, col_rec2 = st.columns([2, 1])
     with col_rec1:
         st.write(
-            "아래 버튼을 누르면 **녹음 시작** ➔ 녹음 후 **녹음 정지**를 눌러주세요."
+            "아래 **실시간 타이머**와 **녹음 버튼**을 함께 사용하여 발화를 녹음하세요."
         )
     with col_rec2:
         if st.button("🗑️ 데이터 초기화", use_container_width=True):
@@ -90,6 +91,66 @@ with col1:
             st.session_state.recording_duration = 0.0
             st.session_state.reset_trigger += 1
             st.rerun()
+
+    # HTML/JS 실시간 스톱워치 위젯 (0.1초 단위 실시간 측정)
+    stopwatch_html = """
+    <div style="font-family: sans-serif; background-color: #f8f9fa; border: 2px solid #3182ce; border-radius: 10px; padding: 12px; text-align: center; margin-bottom: 10px;">
+        <div style="font-size: 13px; color: #4a5568; font-weight: bold; margin-bottom: 4px;">⏱️ 녹음 실시간 스톱워치</div>
+        <div id="stopwatch" style="font-size: 32px; font-weight: bold; color: #2b6cb0; font-family: monospace; margin: 6px 0;">00:00.0</div>
+        <div>
+            <button onclick="startStopwatch()" style="background-color: #38a169; color: white; border: none; padding: 6px 14px; border-radius: 5px; cursor: pointer; font-weight: bold; margin-right: 5px;">▶️ 타이머 시작</button>
+            <button onclick="stopStopwatch()" style="background-color: #e53e3e; color: white; border: none; padding: 6px 14px; border-radius: 5px; cursor: pointer; font-weight: bold; margin-right: 5px;">⏹️ 타이머 정지</button>
+            <button onclick="resetStopwatch()" style="background-color: #718096; color: white; border: none; padding: 6px 14px; border-radius: 5px; cursor: pointer; font-weight: bold;">🔄 초기화</button>
+        </div>
+    </div>
+
+    <script>
+    let timerInterval;
+    let startTime;
+    let elapsedTime = 0;
+
+    function startStopwatch() {
+        if (!timerInterval) {
+            startTime = Date.now() - elapsedTime;
+            timerInterval = setInterval(function printTime() {
+                elapsedTime = Date.now() - startTime;
+                let totalSeconds = Math.floor(elapsedTime / 1000);
+                let minutes = Math.floor(totalSeconds / 60);
+                let seconds = totalSeconds % 60;
+                let tenths = Math.floor((elapsedTime % 1000) / 100);
+                
+                let formattedMins = String(minutes).padStart(2, '0');
+                let formattedSecs = String(seconds).padStart(2, '0');
+                
+                let el = document.getElementById("stopwatch");
+                if (el) {
+                    el.innerHTML = formattedMins + ":" + formattedSecs + "." + tenths;
+                    el.style.color = "#e53e3e";
+                }
+            }, 100);
+        }
+    }
+
+    function stopStopwatch() {
+        clearInterval(timerInterval);
+        timerInterval = null;
+        let el = document.getElementById("stopwatch");
+        if (el) el.style.color = "#38a169";
+    }
+
+    function resetStopwatch() {
+        clearInterval(timerInterval);
+        timerInterval = null;
+        elapsedTime = 0;
+        let el = document.getElementById("stopwatch");
+        if (el) {
+            el.innerHTML = "00:00.0";
+            el.style.color = "#2b6cb0";
+        }
+    }
+    </script>
+    """
+    components.html(stopwatch_html, height=135)
 
     # 녹음 컨트롤러 및 시간 측정 칸
     col_mic, col_dur = st.columns([1, 1])
@@ -104,14 +165,14 @@ with col1:
     with col_dur:
         if st.session_state.recording_completed:
             st.metric(
-                label="⏱️ 실제 녹음 시간",
+                label="📊 최종 분석된 녹음 시간",
                 value=f"{st.session_state.recording_duration} 초",
             )
         else:
             st.metric(
-                label="⏱️ 실제 녹음 시간",
+                label="📊 최종 분석된 녹음 시간",
                 value="대기 중...",
-                help="[녹음 정지] 버튼을 누르면 정확한 녹음 시간이 측정됩니다.",
+                help="[녹음 정지] 후 최종 오디오 데이터 분석 시간이 수치로 확정됩니다.",
             )
 
     # 녹음 완료 후 오디오 바이너리 수신 및 시간 계산
