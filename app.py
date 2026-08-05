@@ -1,10 +1,6 @@
-import io
 import time
-import wave
-import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
-from streamlit_mic_recorder import mic_recorder
 
 # 1. 페이지 기본 설정
 st.set_page_config(
@@ -21,7 +17,7 @@ st.caption(
 )
 st.markdown("---")
 
-# 2. 세션 상태(Session State) 초기화
+# 2. 세션 상태(Session State) 초기화 및 URL 파라미터 수신
 if "prep_start_time" not in st.session_state:
     st.session_state.prep_start_time = None
 if "latency" not in st.session_state:
@@ -30,8 +26,28 @@ if "recording_completed" not in st.session_state:
     st.session_state.recording_completed = False
 if "recording_duration" not in st.session_state:
     st.session_state.recording_duration = 0.0
-if "reset_trigger" not in st.session_state:
-    st.session_state.reset_trigger = 0
+
+# 브라우저 녹음기에서 전달된 실시간 녹음 시간 수신
+query_params = st.query_params
+if "rec_time" in query_params:
+    try:
+        rec_dur = float(query_params["rec_time"])
+        if (
+            not st.session_state.recording_completed
+            or st.session_state.recording_duration != rec_dur
+        ):
+            st.session_state.recording_completed = True
+            st.session_state.recording_duration = rec_dur
+
+            # Latency (지연시간) 계산
+            if st.session_state.prep_start_time:
+                st.session_state.latency = round(
+                    time.time() - st.session_state.prep_start_time, 2
+                )
+            else:
+                st.session_state.latency = round(rec_dur + 1.2, 2)
+    except Exception:
+        pass
 
 # ---------------------------------------------------------
 # 화면 레이아웃 (좌: 발화 및 녹음 / 우: 음성 분석 및 역번역 힌트)
@@ -44,12 +60,11 @@ col1, col2 = st.columns([1, 1])
 with col1:
     st.subheader("📖 1단계: 영어 지문 읽기 및 준비")
 
-    # 학습 지문 박스
     sample_text = "The quick brown fox jumps over the lazy dog."
     st.text_area("오늘의 학습 지문", value=sample_text, height=90, disabled=True)
 
     st.markdown("---")
-    st.subheader("⏱️ 2단계: 발화 준비 및 실시간 타이머")
+    st.subheader("⏱️ 2단계: 발화 준비 및 준비 타이머")
 
     col_btn1, col_btn2 = st.columns([1, 1])
 
@@ -67,9 +82,10 @@ with col1:
             st.session_state.latency = None
             st.session_state.recording_completed = False
             st.session_state.recording_duration = 0.0
+            st.query_params.clear()
             st.rerun()
 
-    # 2단계 전용 실시간 째깍째깍 스톱워치 박스
+    # 2단계 준비 실시간 경과 시간
     if st.session_state.prep_start_time:
         initial_offset = time.time() - st.session_state.prep_start_time
         prep_timer_html = f"""
@@ -88,34 +104,118 @@ with col1:
         """
         components.html(prep_timer_html, height=85)
     else:
-        st.info("💡 위의 **[▶️ 지문 읽기 시작]** 버튼을 누르면 실시간 타이머가 작동합니다.")
+        st.info("💡 위의 **[▶️ 지문 읽기 시작]** 버튼을 누르면 준비 타이머가 작동합니다.")
 
     st.markdown("---")
-    st.subheader("🎙️ 3단계: 녹음 시작 및 녹음 시간 확인")
+    st.subheader("🎙️ 3단계: 녹음 시작 및 0.1초 실시간 녹음 타이머")
 
-    # [녹음 시작 버튼]과 [녹음 시간]을 가로로 정확히 나란히 배치
-    col_mic, col_dur = st.columns([1, 1])
+    # 브라우저 기반 0.1초 실시간 녹음 타이머 + 오디오 레코더 컴포넌트
+    recorder_html = """
+    <div style="font-family: system-ui, -apple-system, sans-serif; background-color: #f8f9fa; border: 1.5px solid #cbd5e0; border-radius: 12px; padding: 16px; margin-bottom: 10px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 15px;">
+            <!-- 녹음 시작 / 정지 버튼 -->
+            <div>
+                <button id="recBtn" onclick="toggleRecording()" style="background-color: #3182ce; color: white; border: none; padding: 12px 24px; font-size: 16px; font-weight: bold; border-radius: 8px; cursor: pointer; transition: all 0.2s ease; display: flex; align-items: center; gap: 8px;">
+                    <span id="btnIcon">▶️</span> <span id="btnText">녹음 시작</span>
+                </button>
+            </div>
 
-    with col_mic:
-        st.caption("👇 아래 버튼을 눌러 녹음을 진행하세요")
-        audio = mic_recorder(
-            start_prompt="▶️ 녹음 시작",
-            stop_prompt="⏹️ 녹음 정지",
-            key=f"recorder_{st.session_state.reset_trigger}",
-        )
+            <!-- 0.1초 실시간 녹음 시간 타이머 박스 -->
+            <div style="background-color: #ffffff; border: 2px solid #e2e8f0; border-radius: 8px; padding: 8px 18px; text-align: center; min-width: 150px;">
+                <div style="font-size: 12px; color: #718096; font-weight: bold;">⏱️ 실시간 녹음 시간</div>
+                <div id="timerDisplay" style="font-size: 26px; font-weight: 800; color: #2d3748; font-family: monospace; margin-top: 2px;">0.0 초</div>
+            </div>
+        </div>
 
-    with col_dur:
-        if st.session_state.recording_completed:
-            st.metric(
-                label="⏱️ 녹음 시간",
-                value=f"{st.session_state.recording_duration} 초",
-            )
-        else:
-            st.metric(
-                label="⏱️ 녹음 시간",
-                value="0.0 초",
-                help="[녹음 정지]를 누르면 실제 녹음된 시간이 여기에 측정됩니다.",
-            )
+        <!-- 녹음 완료 후 재생 플레이어 -->
+        <div id="audioArea" style="margin-top: 14px; display: none;">
+            <div style="font-size: 13px; color: #2f855a; font-weight: bold; margin-bottom: 6px;">🟢 녹음 완료 (녹음된 음성 들어보기)</div>
+            <audio id="audioPlayer" controls style="width: 100%; height: 40px;"></audio>
+        </div>
+    </div>
+
+    <script>
+    let mediaRecorder;
+    let audioChunks = [];
+    let isRecording = false;
+    let startTime;
+    let timerInterval;
+
+    async function toggleRecording() {
+        const btn = document.getElementById("recBtn");
+        const btnIcon = document.getElementById("btnIcon");
+        const btnText = document.getElementById("btnText");
+        const timerDisplay = document.getElementById("timerDisplay");
+        const audioArea = document.getElementById("audioArea");
+
+        if (!isRecording) {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream);
+                audioChunks = [];
+
+                mediaRecorder.ondataavailable = event => {
+                    audioChunks.push(event.data);
+                };
+
+                mediaRecorder.onstop = () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                    const audioUrl = URL.createObjectURL(audioBlob);
+                    const audioPlayer = document.getElementById("audioPlayer");
+                    audioPlayer.src = audioUrl;
+                    audioArea.style.display = "block";
+
+                    // 0.1초 단위 최종 녹음 시간 전달
+                    const finalSecs = ((Date.now() - startTime) / 1000).toFixed(1);
+                    sendToStreamlit(finalSecs);
+                };
+
+                mediaRecorder.start();
+                isRecording = true;
+                startTime = Date.now();
+
+                // 0.1초 (100ms) 단위 실시간 타이머 작동
+                timerInterval = setInterval(() => {
+                    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+                    timerDisplay.innerText = elapsed + " 초";
+                    timerDisplay.style.color = "#e53e3e";
+                }, 100);
+
+                // 버튼 스타일 변경 (녹음 중)
+                btn.style.backgroundColor = "#e53e3e";
+                btnIcon.innerText = "⏹️";
+                btnText.innerText = "녹음 정지";
+
+            } catch (err) {
+                alert("마이크 접근 권한이 필요합니다: " + err.message);
+            }
+        } else {
+            // 녹음 정지
+            mediaRecorder.stop();
+            mediaRecorder.stream.getTracks().forEach(track => track.stop());
+            isRecording = false;
+            clearInterval(timerInterval);
+
+            // 버튼 스타일 복구
+            btn.style.backgroundColor = "#3182ce";
+            btnIcon.innerText = "▶️";
+            btnText.innerText = "녹음 시작";
+            timerDisplay.style.color = "#2b6cb0";
+        }
+    }
+
+    function sendToStreamlit(duration) {
+        try {
+            const url = new URL(window.parent.location.href);
+            url.searchParams.set("rec_time", duration);
+            window.parent.location.href = url.href;
+        } catch(e) {
+            console.log("Streamlit sync error:", e);
+        }
+    }
+    </script>
+    """
+    components.html(recorder_html, height=155)
 
     # 데이터 초기화 버튼
     if st.button("🗑️ 전체 데이터 초기화", use_container_width=True):
@@ -123,38 +223,8 @@ with col1:
         st.session_state.latency = None
         st.session_state.recording_completed = False
         st.session_state.recording_duration = 0.0
-        st.session_state.reset_trigger += 1
+        st.query_params.clear()
         st.rerun()
-
-    # 녹음 완료 후 오디오 바이너리 수신 및 시간 계산
-    if audio:
-        audio_bytes = audio["bytes"]
-
-        if not st.session_state.recording_completed:
-            st.session_state.recording_completed = True
-
-            # 1. 오디오 바이너리 헤더 해석을 통한 정확한 음성 길이(초) 추출
-            try:
-                with wave.open(io.BytesIO(audio_bytes), "rb") as wf:
-                    frames = wf.getnframes()
-                    rate = wf.getframerate()
-                    duration = frames / float(rate)
-                    st.session_state.recording_duration = round(duration, 1)
-            except Exception:
-                st.session_state.recording_duration = 3.0
-
-            # 2. Latency (반응 지연시간) 계산
-            if st.session_state.prep_start_time:
-                st.session_state.latency = round(
-                    time.time() - st.session_state.prep_start_time, 2
-                )
-            else:
-                st.session_state.latency = 3.4
-
-            st.rerun()
-
-        st.success("🟢 **녹음이 완료되었습니다.**")
-        st.audio(audio_bytes, format="audio/wav")
 
 
 # =========================================================
@@ -167,18 +237,15 @@ with col2:
         latency_val = (
             st.session_state.latency if st.session_state.latency else 0.0
         )
+        dur_val = st.session_state.recording_duration
 
         col_m1, col_m2 = st.columns(2)
         with col_m1:
+            st.metric(label="⏱️ 실시간 녹음 총 시간", value=f"{dur_val} 초")
+        with col_m2:
             st.metric(
                 label="⏱️ 반응 지연 시간 (Latency)", value=f"{latency_val} 초"
             )
-        with col_m2:
-            target_time = 3.0
-            if latency_val <= target_time:
-                st.success("✅ 목표 시간 내 발화 (우수)")
-            else:
-                st.warning("⚠️ 지연 시간 초과 (비계 필요)")
 
         st.markdown("---")
         st.subheader("💡 자동 생성된 역번역/어원 비계 (Scaffolding)")
@@ -214,7 +281,7 @@ with col2:
 
     else:
         st.info(
-            "👈 좌측에서 [지문 읽기 시작] 후 [녹음 시작] -> [녹음 정지]를"
-            " 완료하면, 이곳에 **Latency 분석 결과**와 **자동 역번역 비계"
-            " 힌트**가 실시간으로 생성됩니다."
+            "👈 좌측 3단계에서 **[▶️ 녹음 시작]**을 누르고 발화한 후 **[⏹️ 녹음"
+            " 정지]**를 누르시면, 실시간 녹음 시간과 함께 **Latency 분석"
+            " 결과** 및 **역번역 비계**가 이곳에 표시됩니다."
         )
