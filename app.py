@@ -51,16 +51,16 @@ with col1:
     st.markdown("---")
     st.subheader("⏱️ 2단계: 발화 준비 및 타이머")
 
-    col_btn1, col_btn2 = st.columns(2)
+    # [타이머 시작 버튼], [리셋 버튼], [경과 시간 표시 칸]을 나란히 배치
+    col_btn1, col_btn2, col_btn3 = st.columns([1.5, 1, 1.5])
+
     with col_btn1:
         if st.button("▶️ 지문 읽기 시작 (타이머 작동)", use_container_width=True):
             st.session_state.prep_start_time = time.time()
             st.session_state.latency = None
             st.session_state.recording_completed = False
             st.session_state.recording_duration = 0.0
-            st.success(
-                "타이머 시작! 지문을 파악한 후 아래 [녹음 시작] 버튼을 누르세요."
-            )
+            st.success("타이머 시작! 아래 녹음 버튼을 눌러 답변하세요.")
 
     with col_btn2:
         if st.button("🔄 타이머 리셋", use_container_width=True):
@@ -70,18 +70,24 @@ with col1:
             st.session_state.recording_duration = 0.0
             st.rerun()
 
-    # 준비 시작 시간 표시
-    if st.session_state.prep_start_time:
-        elapsed_prep = round(time.time() - st.session_state.prep_start_time, 1)
-        st.info(f"⏳ 준비 시작 후 경과 시간: **{elapsed_prep}초**")
+    with col_btn3:
+        # 타이머 시작 버튼 바로 옆에 경과 시간 실시간 표시
+        if st.session_state.prep_start_time:
+            elapsed_prep = round(
+                time.time() - st.session_state.prep_start_time, 1
+            )
+            st.metric(label="⏱️ 타이머 시작 후 경과 시간", value=f"{elapsed_prep} 초")
+        else:
+            st.metric(label="⏱️ 타이머 시작 후 경과 시간", value="0.0 초")
 
     st.markdown("---")
-    st.subheader("🎙️ 3단계: 녹음 및 실시간 타이머")
+    st.subheader("🎙️ 3단계: 녹음 및 실시간 스톱워치")
 
     col_rec1, col_rec2 = st.columns([2, 1])
     with col_rec1:
         st.write(
-            "아래 **실시간 타이머**와 **녹음 버튼**을 함께 사용하여 발화를 녹음하세요."
+            "아래 **실시간 스톱워치**와 **녹음 버튼**을 함께 활용하여 발화를"
+            " 진행하세요."
         )
     with col_rec2:
         if st.button("🗑️ 데이터 초기화", use_container_width=True):
@@ -92,14 +98,14 @@ with col1:
             st.session_state.reset_trigger += 1
             st.rerun()
 
-    # HTML/JS 실시간 스톱워치 위젯 (0.1초 단위 실시간 측정)
+    # HTML/JS 실시간 스톱워치 위젯 (0.1초 단위 측정)
     stopwatch_html = """
     <div style="font-family: sans-serif; background-color: #f8f9fa; border: 2px solid #3182ce; border-radius: 10px; padding: 12px; text-align: center; margin-bottom: 10px;">
         <div style="font-size: 13px; color: #4a5568; font-weight: bold; margin-bottom: 4px;">⏱️ 녹음 실시간 스톱워치</div>
         <div id="stopwatch" style="font-size: 32px; font-weight: bold; color: #2b6cb0; font-family: monospace; margin: 6px 0;">00:00.0</div>
         <div>
-            <button onclick="startStopwatch()" style="background-color: #38a169; color: white; border: none; padding: 6px 14px; border-radius: 5px; cursor: pointer; font-weight: bold; margin-right: 5px;">▶️ 타이머 시작</button>
-            <button onclick="stopStopwatch()" style="background-color: #e53e3e; color: white; border: none; padding: 6px 14px; border-radius: 5px; cursor: pointer; font-weight: bold; margin-right: 5px;">⏹️ 타이머 정지</button>
+            <button onclick="startStopwatch()" style="background-color: #38a169; color: white; border: none; padding: 6px 14px; border-radius: 5px; cursor: pointer; font-weight: bold; margin-right: 5px;">▶️ 스톱워치 시작</button>
+            <button onclick="stopStopwatch()" style="background-color: #e53e3e; color: white; border: none; padding: 6px 14px; border-radius: 5px; cursor: pointer; font-weight: bold; margin-right: 5px;">⏹️ 스톱워치 정지</button>
             <button onclick="resetStopwatch()" style="background-color: #718096; color: white; border: none; padding: 6px 14px; border-radius: 5px; cursor: pointer; font-weight: bold;">🔄 초기화</button>
         </div>
     </div>
@@ -152,7 +158,7 @@ with col1:
     """
     components.html(stopwatch_html, height=135)
 
-    # 녹음 컨트롤러 및 시간 측정 칸
+    # 녹음 버튼 및 최종 측정 시간 칸
     col_mic, col_dur = st.columns([1, 1])
 
     with col_mic:
