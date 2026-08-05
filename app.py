@@ -49,10 +49,9 @@ with col1:
     st.text_area("오늘의 학습 지문", value=sample_text, height=90, disabled=True)
 
     st.markdown("---")
-    st.subheader("⏱️ 2단계: 발화 준비 및 타이머")
+    st.subheader("⏱️ 2단계: 발화 준비 및 실시간 타이머")
 
-    # [타이머 시작 버튼], [리셋 버튼], [경과 시간 표시 칸]을 나란히 배치
-    col_btn1, col_btn2, col_btn3 = st.columns([1.5, 1, 1.5])
+    col_btn1, col_btn2 = st.columns([1, 1])
 
     with col_btn1:
         if st.button("▶️ 지문 읽기 시작 (타이머 작동)", use_container_width=True):
@@ -60,7 +59,7 @@ with col1:
             st.session_state.latency = None
             st.session_state.recording_completed = False
             st.session_state.recording_duration = 0.0
-            st.success("타이머 시작! 아래 녹음 버튼을 눌러 답변하세요.")
+            st.rerun()
 
     with col_btn2:
         if st.button("🔄 타이머 리셋", use_container_width=True):
@@ -70,25 +69,33 @@ with col1:
             st.session_state.recording_duration = 0.0
             st.rerun()
 
-    with col_btn3:
-        # 타이머 시작 버튼 바로 옆에 경과 시간 실시간 표시
-        if st.session_state.prep_start_time:
-            elapsed_prep = round(
-                time.time() - st.session_state.prep_start_time, 1
-            )
-            st.metric(label="⏱️ 타이머 시작 후 경과 시간", value=f"{elapsed_prep} 초")
-        else:
-            st.metric(label="⏱️ 타이머 시작 후 경과 시간", value="0.0 초")
+    # 2단계 전용 실시간 째깍째깍 스톱워치 박스
+    if st.session_state.prep_start_time:
+        initial_offset = time.time() - st.session_state.prep_start_time
+        prep_timer_html = f"""
+        <div style="font-family: sans-serif; background-color: #ebf8ff; border: 2px solid #3182ce; border-radius: 8px; padding: 10px; text-align: center; margin-top: 8px;">
+            <div style="font-size: 13px; color: #2c5282; font-weight: bold;">⏱️ 발화 준비 실시간 경과 시간</div>
+            <div id="prep_clock" style="font-size: 26px; font-weight: bold; color: #2b6cb0; font-family: monospace; margin-top: 2px;">{initial_offset:.1f} 초</div>
+        </div>
+        <script>
+            let start = Date.now() - ({initial_offset} * 1000);
+            setInterval(function() {{
+                let diff = ((Date.now() - start) / 1000).toFixed(1);
+                let el = document.getElementById("prep_clock");
+                if (el) el.innerText = diff + " 초";
+            }}, 100);
+        </script>
+        """
+        components.html(prep_timer_html, height=85)
+    else:
+        st.info("💡 위의 **[▶️ 지문 읽기 시작]** 버튼을 누르면 실시간 타이머가 작동합니다.")
 
     st.markdown("---")
-    st.subheader("🎙️ 3단계: 녹음 및 실시간 스톱워치")
+    st.subheader("🎙️ 3단계: 녹음 실행 및 데이터 제어")
 
     col_rec1, col_rec2 = st.columns([2, 1])
     with col_rec1:
-        st.write(
-            "아래 **실시간 스톱워치**와 **녹음 버튼**을 함께 활용하여 발화를"
-            " 진행하세요."
-        )
+        st.write("지문 파악이 끝나면 아래 버튼으로 녹음을 진행하세요.")
     with col_rec2:
         if st.button("🗑️ 데이터 초기화", use_container_width=True):
             st.session_state.prep_start_time = None
@@ -97,66 +104,6 @@ with col1:
             st.session_state.recording_duration = 0.0
             st.session_state.reset_trigger += 1
             st.rerun()
-
-    # HTML/JS 실시간 스톱워치 위젯 (0.1초 단위 측정)
-    stopwatch_html = """
-    <div style="font-family: sans-serif; background-color: #f8f9fa; border: 2px solid #3182ce; border-radius: 10px; padding: 12px; text-align: center; margin-bottom: 10px;">
-        <div style="font-size: 13px; color: #4a5568; font-weight: bold; margin-bottom: 4px;">⏱️ 녹음 실시간 스톱워치</div>
-        <div id="stopwatch" style="font-size: 32px; font-weight: bold; color: #2b6cb0; font-family: monospace; margin: 6px 0;">00:00.0</div>
-        <div>
-            <button onclick="startStopwatch()" style="background-color: #38a169; color: white; border: none; padding: 6px 14px; border-radius: 5px; cursor: pointer; font-weight: bold; margin-right: 5px;">▶️ 스톱워치 시작</button>
-            <button onclick="stopStopwatch()" style="background-color: #e53e3e; color: white; border: none; padding: 6px 14px; border-radius: 5px; cursor: pointer; font-weight: bold; margin-right: 5px;">⏹️ 스톱워치 정지</button>
-            <button onclick="resetStopwatch()" style="background-color: #718096; color: white; border: none; padding: 6px 14px; border-radius: 5px; cursor: pointer; font-weight: bold;">🔄 초기화</button>
-        </div>
-    </div>
-
-    <script>
-    let timerInterval;
-    let startTime;
-    let elapsedTime = 0;
-
-    function startStopwatch() {
-        if (!timerInterval) {
-            startTime = Date.now() - elapsedTime;
-            timerInterval = setInterval(function printTime() {
-                elapsedTime = Date.now() - startTime;
-                let totalSeconds = Math.floor(elapsedTime / 1000);
-                let minutes = Math.floor(totalSeconds / 60);
-                let seconds = totalSeconds % 60;
-                let tenths = Math.floor((elapsedTime % 1000) / 100);
-                
-                let formattedMins = String(minutes).padStart(2, '0');
-                let formattedSecs = String(seconds).padStart(2, '0');
-                
-                let el = document.getElementById("stopwatch");
-                if (el) {
-                    el.innerHTML = formattedMins + ":" + formattedSecs + "." + tenths;
-                    el.style.color = "#e53e3e";
-                }
-            }, 100);
-        }
-    }
-
-    function stopStopwatch() {
-        clearInterval(timerInterval);
-        timerInterval = null;
-        let el = document.getElementById("stopwatch");
-        if (el) el.style.color = "#38a169";
-    }
-
-    function resetStopwatch() {
-        clearInterval(timerInterval);
-        timerInterval = null;
-        elapsedTime = 0;
-        let el = document.getElementById("stopwatch");
-        if (el) {
-            el.innerHTML = "00:00.0";
-            el.style.color = "#2b6cb0";
-        }
-    }
-    </script>
-    """
-    components.html(stopwatch_html, height=135)
 
     # 녹음 버튼 및 최종 측정 시간 칸
     col_mic, col_dur = st.columns([1, 1])
@@ -171,14 +118,14 @@ with col1:
     with col_dur:
         if st.session_state.recording_completed:
             st.metric(
-                label="📊 최종 분석된 녹음 시간",
+                label="📊 최종 녹음된 음성 길이",
                 value=f"{st.session_state.recording_duration} 초",
             )
         else:
             st.metric(
-                label="📊 최종 분석된 녹음 시간",
+                label="📊 최종 녹음된 음성 길이",
                 value="대기 중...",
-                help="[녹음 정지] 후 최종 오디오 데이터 분석 시간이 수치로 확정됩니다.",
+                help="[녹음 정지] 후 최종 오디오 데이터의 길이가 수치로 확정됩니다.",
             )
 
     # 녹음 완료 후 오디오 바이너리 수신 및 시간 계산
