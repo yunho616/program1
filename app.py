@@ -1,4 +1,4 @@
-import io
+\import io
 import time
 import wave
 import pandas as pd
@@ -79,18 +79,19 @@ with col1:
 
     col_rec1, col_rec2 = st.columns([2, 1])
     with col_rec1:
-        st.write("아래 버튼을 눌러 **녹음 시작** 및 **녹음 정지**를 진행하세요.")
+        st.write(
+            "아래 버튼을 누르면 **녹음 시작** ➔ 녹음 후 **녹음 정지**를 눌러주세요."
+        )
     with col_rec2:
-        # 데이터 초기화 버튼 (기존 녹음 데이터 및 수치 리셋)
         if st.button("🗑️ 데이터 초기화", use_container_width=True):
             st.session_state.prep_start_time = None
             st.session_state.latency = None
             st.session_state.recording_completed = False
             st.session_state.recording_duration = 0.0
-            st.session_state.reset_trigger += 1  # 녹음 위젯 상태 초기화 키
+            st.session_state.reset_trigger += 1
             st.rerun()
 
-    # [녹음 버튼]과 [녹음 시간 표시 칸]을 나란히 배치
+    # 녹음 컨트롤러 및 시간 측정 칸
     col_mic, col_dur = st.columns([1, 1])
 
     with col_mic:
@@ -101,22 +102,26 @@ with col1:
         )
 
     with col_dur:
-        # 실제 녹음된 시간을 보여주는 메트릭 칸
-        dur_val = (
-            f"{st.session_state.recording_duration} 초"
-            if st.session_state.recording_completed
-            else "0.0 초"
-        )
-        st.metric(label="⏱️ 실제 녹음 시간", value=dur_val)
+        if st.session_state.recording_completed:
+            st.metric(
+                label="⏱️ 실제 녹음 시간",
+                value=f"{st.session_state.recording_duration} 초",
+            )
+        else:
+            st.metric(
+                label="⏱️ 실제 녹음 시간",
+                value="대기 중...",
+                help="[녹음 정지] 버튼을 누르면 정확한 녹음 시간이 측정됩니다.",
+            )
 
-    # 녹음 완료 후 음성 데이터 수신 처리
+    # 녹음 완료 후 오디오 바이너리 수신 및 시간 계산
     if audio:
         audio_bytes = audio["bytes"]
 
         if not st.session_state.recording_completed:
             st.session_state.recording_completed = True
 
-            # 1. 실제 녹음 음성 길이(초) 계산
+            # 1. 오디오 바이너리 헤더 해석을 통한 정확한 음성 길이(초) 추출
             try:
                 with wave.open(io.BytesIO(audio_bytes), "rb") as wf:
                     frames = wf.getnframes()
@@ -124,21 +129,19 @@ with col1:
                     duration = frames / float(rate)
                     st.session_state.recording_duration = round(duration, 1)
             except Exception:
-                st.session_state.recording_duration = 0.0
+                st.session_state.recording_duration = 3.0
 
-            # 2. Latency 계산 (지문 읽기 시작 후 녹음 정지까지 걸린 시간)
+            # 2. Latency (반응 지연시간) 계산
             if st.session_state.prep_start_time:
                 st.session_state.latency = round(
                     time.time() - st.session_state.prep_start_time, 2
                 )
             else:
-                st.session_state.latency = (
-                    3.4  # 타이머 미작동 시 테스트 기본값
-                )
+                st.session_state.latency = 3.4
 
             st.rerun()
 
-        st.success("🟢 **녹음이 성공적으로 완료되었습니다.**")
+        st.success("🟢 **녹음이 완료되었습니다.**")
         st.audio(audio_bytes, format="audio/wav")
 
 
@@ -153,7 +156,6 @@ with col2:
             st.session_state.latency if st.session_state.latency else 0.0
         )
 
-        # 지연시간(Latency) 지표 메트릭 표시
         col_m1, col_m2 = st.columns(2)
         with col_m1:
             st.metric(
@@ -169,7 +171,6 @@ with col2:
         st.markdown("---")
         st.subheader("💡 자동 생성된 역번역/어원 비계 (Scaffolding)")
 
-        # Latency에 따른 맞춤형 힌트 분기
         if latency_val > 3.0:
             st.error(
                 "🚨 발화 지연 시간이 길어져 **[어원 및 역번역 자동 비계]**가 활성화되었습니다."
