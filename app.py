@@ -20,6 +20,8 @@ if "latency" not in st.session_state:
     st.session_state.latency = None
 if "recording_completed" not in st.session_state:
     st.session_state.recording_completed = False
+if "reset_trigger" not in st.session_state:
+    st.session_state.reset_trigger = 0
 
 # ---------------------------------------------------------
 # 화면 레이아웃 (좌: 발화 및 녹음 / 우: 음성 분석 및 역번역 힌트)
@@ -60,14 +62,25 @@ with col1:
         st.info(f"⏳ 준비 시작 후 경과 시간: **{elapsed_prep}초**")
 
     st.markdown("---")
-    st.subheader("🎙️ 3단계: 녹음 시작 및 정지")
-    st.write("아래 버튼을 누르면 **녹음 시작**으로 바뀌며, 녹음 중에 누르면 **녹음 정지**가 됩니다.")
+    st.subheader("🎙️ 3단계: 녹음 및 데이터 제어")
+    
+    col_rec1, col_rec2 = st.columns([2, 1])
+    with col_rec1:
+        st.write("아래 버튼을 눌러 **녹음 시작** 및 **녹음 정지**를 진행하세요.")
+    with col_rec2:
+        # 데이터 초기화 버튼 (기존 녹음 데이터 및 수치 리셋)
+        if st.button("🗑️ 데이터 초기화", use_container_width=True):
+            st.session_state.prep_start_time = None
+            st.session_state.latency = None
+            st.session_state.recording_completed = False
+            st.session_state.reset_trigger += 1  # 녹음 위젯 상태 초기화 키
+            st.rerun()
 
-    # [녹음 시작] / [녹음 정지] 텍스트 버튼 생성
+    # [녹음 시작] / [녹음 정지] 텍스트 버튼
     audio = mic_recorder(
         start_prompt="▶️ 녹음 시작",
         stop_prompt="⏹️ 녹음 정지",
-        key="recorder"
+        key=f"recorder_{st.session_state.reset_trigger}"
     )
 
     # 녹음 완료 후 음성 데이터 수신 처리
