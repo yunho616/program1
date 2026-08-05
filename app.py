@@ -1,7 +1,6 @@
 import streamlit as st
 import time
-import io
-from audio_recorder_streamlit import audio_recorder
+from streamlit_mic_recorder import mic_recorder
 
 # 1. 페이지 기본 설정
 st.set_page_config(
@@ -17,8 +16,6 @@ st.markdown("---")
 # 2. 세션 상태(Session State) 초기화
 if "prep_start_time" not in st.session_state:
     st.session_state.prep_start_time = None
-if "speaking_start_time" not in st.session_state:
-    st.session_state.speaking_start_time = None
 if "latency" not in st.session_state:
     st.session_state.latency = None
 if "recording_completed" not in st.session_state:
@@ -46,15 +43,13 @@ with col1:
     with col_btn1:
         if st.button("▶️ 지문 읽기 시작 (타이머 작동)", use_container_width=True):
             st.session_state.prep_start_time = time.time()
-            st.session_state.speaking_start_time = None
             st.session_state.latency = None
             st.session_state.recording_completed = False
-            st.success("타이머 시작! 지문을 파악한 후 아래 마이크 버튼을 눌러 답변을 시작하세요.")
+            st.success("타이머 시작! 지문을 파악한 후 아래 [녹음 시작] 버튼을 누르세요.")
 
     with col_btn2:
         if st.button("🔄 타이머 리셋", use_container_width=True):
             st.session_state.prep_start_time = None
-            st.session_state.speaking_start_time = None
             st.session_state.latency = None
             st.session_state.recording_completed = False
             st.rerun()
@@ -66,30 +61,29 @@ with col1:
 
     st.markdown("---")
     st.subheader("🎙️ 3단계: 녹음 시작 및 정지")
-    
-    st.write("아래 마이크 버튼을 **[클릭]**하면 녹음이 시작되고, **[다시 클릭]**하면 녹음이 정지됩니다.")
+    st.write("아래 버튼을 누르면 **녹음 시작**으로 바뀌며, 녹음 중에 누르면 **녹음 정지**가 됩니다.")
 
-    # 녹음 컴포넌트
-    audio_bytes = audio_recorder(
-        text="마이크 클릭: 녹음 시작 / 정지",
-        recording_color="#e84c3d",
-        neutral_color="#6aa84f",
-        icon_name="microphone",
-        icon_size="3x",
+    # [녹음 시작] / [녹음 정지] 텍스트 버튼 생성
+    audio = mic_recorder(
+        start_prompt="▶️ 녹음 시작",
+        stop_prompt="⏹️ 녹음 정지",
+        key="recorder"
     )
 
-    # 음성이 수신된 경우 처리
-    if audio_bytes:
+    # 녹음 완료 후 음성 데이터 수신 처리
+    if audio:
+        audio_bytes = audio["bytes"]
+        
         if not st.session_state.recording_completed:
             st.session_state.recording_completed = True
             
-            # Latency 계산 (지문 읽기 시작 후 녹음 버튼을 누르기까지 걸린 시간)
+            # Latency 계산 (지문 읽기 시작 후 녹음 정지까지 걸린 시간)
             if st.session_state.prep_start_time:
                 st.session_state.latency = round(time.time() - st.session_state.prep_start_time, 2)
             else:
-                st.session_state.latency = 2.5  # 타이머 미작동 시 기본 테스트값
+                st.session_state.latency = 3.4  # 타이머 미작동 시 테스트 기본값
 
-        st.error("🟢 **녹음이 완료되었습니다.** 아래에서 녹음된 음성을 들으실 수 있습니다.")
+        st.success("🟢 **녹음이 성공적으로 완료되었습니다.**")
         st.audio(audio_bytes, format="audio/wav")
 
 
@@ -143,4 +137,4 @@ with col2:
             })
 
     else:
-        st.info("👈 좌측에서 [지문 읽기 시작]을 누르고 녹음을 완료하면, 이곳에 **Latency 분석 결과**와 **자동 역번역 비계 힌트**가 실시간으로 생성됩니다.")
+        st.info("👈 좌측에서 [지문 읽기 시작] 후 [녹음 시작] -> [녹음 정지]를 완료하면, 이곳에 **Latency 분석 결과**와 **자동 역번역 비계 힌트**가 실시간으로 생성됩니다.")
