@@ -1,4 +1,6 @@
+import io
 import time
+import wave
 import pandas as pd
 import streamlit as st
 from streamlit_mic_recorder import mic_recorder
@@ -25,6 +27,8 @@ if "latency" not in st.session_state:
     st.session_state.latency = None
 if "recording_completed" not in st.session_state:
     st.session_state.recording_completed = False
+if "recording_duration" not in st.session_state:
+    st.session_state.recording_duration = 0.0
 if "reset_trigger" not in st.session_state:
     st.session_state.reset_trigger = 0
 
@@ -52,6 +56,7 @@ with col1:
             st.session_state.prep_start_time = time.time()
             st.session_state.latency = None
             st.session_state.recording_completed = False
+            st.session_state.recording_duration = 0.0
             st.success(
                 "타이머 시작! 지문을 파악한 후 아래 [녹음 시작] 버튼을 누르세요."
             )
@@ -61,6 +66,7 @@ with col1:
             st.session_state.prep_start_time = None
             st.session_state.latency = None
             st.session_state.recording_completed = False
+            st.session_state.recording_duration = 0.0
             st.rerun()
 
     # 준비 시작 시간 표시
@@ -80,15 +86,28 @@ with col1:
             st.session_state.prep_start_time = None
             st.session_state.latency = None
             st.session_state.recording_completed = False
+            st.session_state.recording_duration = 0.0
             st.session_state.reset_trigger += 1  # 녹음 위젯 상태 초기화 키
             st.rerun()
 
-    # [녹음 시작] / [녹음 정지] 텍스트 버튼
-    audio = mic_recorder(
-        start_prompt="▶️ 녹음 시작",
-        stop_prompt="⏹️ 녹음 정지",
-        key=f"recorder_{st.session_state.reset_trigger}",
-    )
+    # [녹음 버튼]과 [녹음 시간 표시 칸]을 나란히 배치
+    col_mic, col_dur = st.columns([1, 1])
+
+    with col_mic:
+        audio = mic_recorder(
+            start_prompt="▶️ 녹음 시작",
+            stop_prompt="⏹️ 녹음 정지",
+            key=f"recorder_{st.session_state.reset_trigger}",
+        )
+
+    with col_dur:
+        # 실제 녹음된 시간을 보여주는 메트릭 칸
+        dur_val = (
+            f"{st.session_state.recording_duration} 초"
+            if st.session_state.recording_completed
+            else "0.0 초"
+        )
+        st.metric(label="⏱️ 실제 녹음 시간", value=dur_val)
 
     # 녹음 완료 후 음성 데이터 수신 처리
     if audio:
@@ -97,7 +116,17 @@ with col1:
         if not st.session_state.recording_completed:
             st.session_state.recording_completed = True
 
-            # Latency 계산 (지문 읽기 시작 후 녹음 정지까지 걸린 시간)
+            # 1. 실제 녹음 음성 길이(초) 계산
+            try:
+                with wave.open(io.BytesIO(audio_bytes), "rb") as wf:
+                    frames = wf.getnframes()
+                    rate = wf.getframerate()
+                    duration = frames / float(rate)
+                    st.session_state.recording_duration = round(duration, 1)
+            except Exception:
+                st.session_state.recording_duration = 0.0
+
+            # 2. Latency 계산 (지문 읽기 시작 후 녹음 정지까지 걸린 시간)
             if st.session_state.prep_start_time:
                 st.session_state.latency = round(
                     time.time() - st.session_state.prep_start_time, 2
@@ -106,6 +135,8 @@ with col1:
                 st.session_state.latency = (
                     3.4  # 타이머 미작동 시 테스트 기본값
                 )
+
+            st.rerun()
 
         st.success("🟢 **녹음이 성공적으로 완료되었습니다.**")
         st.audio(audio_bytes, format="audio/wav")
