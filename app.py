@@ -1,70 +1,117 @@
-import streamlit as st
 import time
+import pandas as pd
+import streamlit as st
+from audio_recorder_streamlit import audio_recorder
 
-# 1. 웹 페이지 기본 설정
-st.set_page_config(page_title="인지부하 제어 튜터링 시스템", layout="centered")
+# 페이지 설정
+st.set_page_config(
+    page_title="특허 1호 MVP - 역번역 & Latency AI 튜터", layout="wide"
+)
 
-st.title("🧠 특허 1호 기반 인지부하 제어 튜터링 시스템")
-st.caption("역번역 비계 & 음성 반응 분석 엔진 (MVP 프로토타입)")
+# 세션 상태 초기화 (응답 지연시간 및 비계 제어용)
+if "start_time" not in st.session_state:
+    st.session_state.start_time = None
+if "latency" not in st.session_state:
+    st.session_state.latency = 0.0
+if "scaffold_active" not in st.session_state:
+    st.session_state.scaffold_active = False
 
-# 2. 사이드바 - 학생 정보 입력
-st.sidebar.header("학생 정보")
-student_name = st.sidebar.text_input("학생 이름을 입력하세요", value="홍길동")
+# 헤더 영역
+st.title("🎓 특허 1호 MVP: 역번역 기반 동적 비계 AI 튜터")
+st.caption("학생의 발화 지연시간(Latency)을 실시간 감지하여 최적의 역번역 비계를 제공합니다.")
 
-# 3. 학습 지문 세션 (영어/국어 예시)
-st.subheader("📖 [지문] 인지과학 및 형태소 구조")
-text_content = """
-Entropy is a measure of disorder or randomness in a system.
-(엔트로피는 시스템 내부의 무질서도나 불확실성을 나타내는 척도이다.)
-"""
-st.info(text_content)
+# 사이드바: 학생 정보 및 제어
+with st.sidebar:
+    st.header("👤 학생 정보")
+    student_id = st.text_input("학생 ID / 이름", value="윤호학생")
+    target_subject = st.selectbox("학습 과목 선택", ["영어 (English)", "국어 (Korean)"])
 
-# 4. 특허 1호 핵심: 가변적 역번역 비계 (Scaffolding)
-st.markdown("### 🔍 특허 1호 역번역(한자-라틴 어원) 비계")
+    st.divider()
+    st.header("⚙️ 비계(Scaffolding) 임계값")
+    latency_threshold = st.slider(
+        "역번역 자동 노출 지연시간 (초)", 1.0, 10.0, 3.0, 0.5
+    )
 
-# 비계 토글 버튼
-if "show_scaffold" not in st.session_state:
-    st.session_state.show_scaffold = False
-
+# 메인 프레임: 학습 지문 및 문항 제시
 col1, col2 = st.columns([1, 1])
+
 with col1:
-    if st.button("💡 역번역 힌트 보기 (인지 부하 완화)"):
-        st.session_state.show_scaffold = True
+    st.subheader("📖 [제시 지문]")
+    sample_text = (
+        "The **benevolent** leader decided to **magnify** the resources "
+        "for the community to ensure **sustainable** growth."
+    )
+    st.info(sample_text)
+
+    st.write("**❓ 질문:** 위 문장에서 리더의 행동 특징을 설명해 보세요.")
+
+    # 지문 읽기 시작 버튼 (타이머 작동)
+    if st.button("⏱️ 답변 준비 완료 (타이머 시작)"):
+        st.session_state.start_time = time.time()
+        st.session_state.scaffold_active = False
+        st.success("타이머가 시작되었습니다! 아래 마이크 버튼을 눌러 답변해 주세요.")
 
 with col2:
-    if st.button("❌ 힌트 닫기"):
-        st.session_state.show_scaffold = False
+    st.subheader("💡 역번역(Reverse-Translation) 비계")
 
-# 비계 텍스트 출력 영역
-if st.session_state.show_scaffold:
-    st.success("""
-    **[역번역 융합 비계 - 한자어 & 라틴어 어원 매핑]**
-    * **Entropy (엔트로피):** Greek *en-* (안에) + *trope* (변화/돌림) ➔ '내부적 변화의 정도'
-    * **Disorder (무질서):** Latin *dis-* (분리/부정) + *ordo* (질서) ➔ '질서가 흐트러짐'
-    """)
+    # 수동 비계 버튼 혹은 Latency 초과 시 자동 노출 영역
+    if st.session_state.scaffold_active:
+        st.warning("⚠️ **[자동 활성화된 역번역 어원 비계]**")
+        st.markdown(
+            """
+        - **benevolent**: *bene* (좋은, Good) + *volent* (의지, Wish) ➔ **선량한/자비로운**
+        - **magnify**: *magni* (큰, Great) + *fy* (만들다, Make) ➔ **확대하다**
+        - **sustainable**: *sub* (아래에서) + *tenere* (유지하다) ➔ **지속 가능한**
+        """
+        )
+    else:
+        st.write("발화 지연시간이 길어지면 어원 기반 역번역 힌트가 자동으로 노출됩니다.")
+        if st.button("👁️ 힌트 수동 보기"):
+            st.session_state.scaffold_active = True
+            st.rerun()
 
-# 5. 음성 답변 및 지연시간(Latency) 측정 시뮬레이션
-st.markdown("---")
-st.markdown("### 🎙️ 음성 답변 및 인지 지연 분석")
+st.divider()
 
-st.write("질문: '엔트로피(Entropy)'의 어원적 의미를 바탕으로 시스템의 무질서도를 설명해 보세요.")
+# 음성 녹음 및 분석 영역
+st.subheader("🎙️ 실시간 음성 답변 및 지연시간(Latency) 측정")
 
-# 음성 제출 버튼 (추후 마이크 녹음 라이브러리로 대체)
-if st.button("🎙️ 음성 녹음 시작 / 제출 (테스트)"):
-    start_time = time.time()
-    
-    with st.spinner("학생의 음성 분석 및 Latency(지연시간) 측정 중..."):
-        time.sleep(2)  # 분석 대기 시뮬레이션
+st.write("아래 마이크 아이콘을 누르고 답변을 말씀하신 뒤, 한번 더 눌러 녹음을 종료하세요.")
+audio_bytes = audio_recorder(
+    text="마이크 버튼을 클릭하세요",
+    recording_color="#e8b62c",
+    neutral_color="#6aa36f",
+    icon_name="microphone",
+    icon_size="2x",
+)
+
+if audio_bytes:
+    # 녹음이 완료된 시점에 Latency 계산
+    if st.session_state.start_time is not None:
         end_time = time.time()
-        
-        # 임시 지연시간 계산
-        latency = 3.2  # 초단위 (테스트용)
-        
-        st.write(f"⏱️ **응답 지연 시간(Latency):** `{latency}초`")
-        
-        # Latency가 기준치(3초) 초과 시 자동 우회 보정 노출
-        if latency >= 3.0:
-            st.warning("⚠️ 인지 부하 감지! (지연 시간 3초 초과) ➔ 역번역 보정 힌트를 자동 활성화합니다.")
-            st.session_state.show_scaffold = True
-        else:
-            st.success("✅ 원활한 인지 인출 상태입니다.")
+        st.session_state.latency = round(
+            end_time - st.session_state.start_time, 2
+        )
+    else:
+        st.session_state.latency = 0.0
+
+    st.audio(audio_bytes, format="audio/wav")
+    st.success(f"✅ 음성 수신 완료! 측정된 응답 지연시간(Latency): **{st.session_state.latency}초**")
+
+    # 임계값 초과 여부 판단 및 자동 비계 개입
+    if st.session_state.latency >= latency_threshold:
+        st.session_state.scaffold_active = True
+        st.error(
+            f"응답 지연시간({st.session_state.latency}초)이 임계값({latency_threshold}초)을 초과하여 역번역 비계를 자동으로 제공합니다."
+        )
+
+    # 저장 데이터 시각화
+    log_data = {
+        "학생ID": [student_id],
+        "과목": [target_subject],
+        "Latency(초)": [st.session_state.latency],
+        "비계제공여부": [st.session_state.scaffold_active],
+        "기록시각": [time.strftime("%Y-%m-%d %H:%M:%S")],
+    }
+    df = pd.DataFrame(log_data)
+    st.subheader("📊 시뮬레이션 수집 데이터 (DB 저장용)")
+    st.dataframe(df)
