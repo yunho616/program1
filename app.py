@@ -94,11 +94,28 @@ with col1:
                     round(end_time - st.session_state.rec_start_time, 1), 1.0
                 )
 
+                # 단어별 타임스탬프 및 Latency 데이터 생성 (모의 음성 처리 엔진 데이터)
+                word_latencies = [
+                    {"word": "The", "start": 0.2, "latency": 0.2, "status": "Good", "score": 98},
+                    {"word": "quick", "start": 0.6, "latency": 0.4, "status": "Good", "score": 95},
+                    {"word": "brown", "start": 1.1, "latency": 0.5, "status": "Good", "score": 92},
+                    {"word": "fox", "start": 1.8, "latency": 0.7, "status": "Warning", "score": 78},
+                    {"word": "jumps", "start": 3.4, "latency": 1.6, "status": "Delay", "score": 64},  # 망설임 구간 발생
+                    {"word": "over", "start": 4.1, "latency": 0.7, "status": "Good", "score": 90},
+                    {"word": "the", "start": 4.6, "latency": 0.5, "status": "Good", "score": 96},
+                    {"word": "lazy", "start": 5.2, "latency": 0.6, "status": "Good", "score": 88},
+                    {"word": "dog.", "start": 5.9, "latency": 0.7, "status": "Good", "score": 94},
+                ]
+
+                max_word_latency = max([w["latency"] for w in word_latencies])
+
                 st.session_state.final_rec_duration = rec_duration
                 st.session_state.analysis_data = {
-                    "latency": 1.5,  # 기준 지연 시간
+                    "latency": 0.2,  # 최초 첫 단어 발화 지연 시간
                     "duration": rec_duration,
-                    "pause_ratio": 12.5,
+                    "pause_ratio": 18.5,
+                    "word_analysis": word_latencies,
+                    "max_word_latency": max_word_latency,
                 }
                 st.session_state.is_recording = False
                 st.rerun()
@@ -127,7 +144,7 @@ with col2:
         col_m1, col_m2, col_m3 = st.columns(3)
         with col_m1:
             st.metric(
-                label="⏱️ 반응 지연 (Latency)", value=f"{data['latency']} 초"
+                label="⏱️ 첫 발화 지연 (Latency)", value=f"{data['latency']} 초"
             )
         with col_m2:
             st.metric(label="🎙️ 음성 총 길이", value=f"{data['duration']} 초")
@@ -135,43 +152,71 @@ with col2:
             st.metric(label="⏸️ 망설임 구간 비율", value=f"{data['pause_ratio']}%")
 
         # ---------------------------------------------------------
-        # 추가 요청 사항: 분석 결과와 비계 사이 학습 지문 재표시
+        # 단어별 Latency 분석 테이블 및 카드 표출
         # ---------------------------------------------------------
         st.markdown("---")
-        st.subheader("📖 분석 대상 지문")
-        st.text_area(
-            "학습 대상 영어 지문",
-            value=sample_text,
-            height=70,
-            disabled=True,
-            key="right_col_sample_text",
-        )
+        st.subheader("📖 분석 대상 지문 (단어별 Latency 분석)")
+        
+        words_data = data.get("word_analysis", [])
+        
+        # 단어별 Latency 시각화 Grid
+        cols_per_row = 3
+        for i in range(0, len(words_data), cols_per_row):
+            row_words = words_data[i : i + cols_per_row]
+            row_cols = st.columns(cols_per_row)
+            for idx, item in enumerate(row_words):
+                with row_cols[idx]:
+                    # 지연 시간에 따른 상태 색상 부여
+                    if item["latency"] >= 1.2:
+                        bg_color = "#fff5f5"
+                        border_color = "#e53e3e"
+                        tag = "🚨 지연 감지"
+                    elif item["latency"] >= 0.6:
+                        bg_color = "#fffaf0"
+                        border_color = "#dd6b20"
+                        tag = "⚠️ 약간 망설임"
+                    else:
+                        bg_color = "#f0fff4"
+                        border_color = "#38a169"
+                        tag = "✅ 원활"
+
+                    st.markdown(
+                        f"""
+                        <div style="background-color: {bg_color}; border: 1.5px solid {border_color}; border-radius: 8px; padding: 10px; text-align: center; margin-bottom: 8px;">
+                            <div style="font-size: 16px; font-weight: bold; color: #2d3748;">{item['word']}</div>
+                            <div style="font-size: 12px; color: #718096; margin-top: 4px;">시작 시점: <b>{item['start']}초</b></div>
+                            <div style="font-size: 13px; font-weight: bold; color: {border_color}; margin-top: 2px;">Latency: {item['latency']}초</div>
+                            <div style="font-size: 11px; margin-top: 4px;">{tag} ({item['score']}점)</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
 
         st.markdown("---")
         st.subheader("💡 자동 생성된 역번역/어원 비계 (Scaffolding)")
 
+        # 특정 단어에서 1.2초 이상 Latency가 발생하거나 전체 지연률이 높아진 경우 비계 트리거
         is_scaffold_needed = (
-            data["latency"] > 3.0 or data["pause_ratio"] > 25.0
+            data["max_word_latency"] >= 1.2 or data["pause_ratio"] > 25.0
         )
 
         if is_scaffold_needed:
             st.error(
-                "🚨 **발화 지연(3초 초과)** 감지! 자동 역번역 및 어원"
-                " 비계가 활성화되었습니다."
+                "🚨 **특정 단어(jumps) 발화지연(1.2초 이상)** 감지! 자동 역번역 및 어원 비계가 활성화되었습니다."
             )
             st.markdown("### 1. 직독직해 역번역 힌트")
             st.info(
-                "**[어순 배치 힌트]** 빠른 갈색 여우가 ➔ 뛰어넘는다 ➔ 게으른 개를"
+                "**[어순 배치 힌트]** 빠른 갈색 여우가 ➔ **[지연 구간] 뛰어넘는다 (jumps)** ➔ 게으른 개를"
             )
-            st.markdown("### 2. 핵심 어원 분석")
+            st.markdown("### 2. 지연 단어 어원 심층 분석")
             st.json({
+                "jumps [지연 발생]": "중세 영어 jumpen (갑자기 이동하다, 뛰어오르다)",
                 "quick": "고대 영어 cwic (살아있는, 활발한)",
-                "jumps": "중세 영어 jumpen (갑자기 이동하다)",
                 "lazy": "저지 독일어 lasich (느슨한, 게으른)",
             })
         else:
             st.success(
-                "🎉 매우 원활한 반응속도입니다! 힌트 없이 완벽하게 수행했습니다."
+                "🎉 모든 단어의 발화 반응속도가 원활합니다! 힌트 없이 완벽하게 수행했습니다."
             )
             st.json({
                 "표현 확장 팁": (
@@ -182,5 +227,5 @@ with col2:
     else:
         st.info(
             "👈 좌측에서 **[🔴 녹음 시작]** 후 **[⏹️ 녹음 정지 및 분석 실행]**을"
-            " 누르시면 즉시 우측에 분석 데이터와 비계 힌트가 출력됩니다."
+            " 누르시면 즉시 단어별 Latency 분석 데이터와 비계 힌트가 출력됩니다."
         )
