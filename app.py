@@ -167,11 +167,14 @@ with col1:
     col_rec1, col_rec2 = st.columns([1, 1])
 
     with col_rec1:
-        st.caption("👇 아래 버튼을 클릭하여 녹음을 진행하세요")
+        st.caption("👇 [녹음 시작] 버튼을 눌러 발화를 시작하고, 완료 후 [녹음 정지]를 누르세요")
+        
+        # 버튼을 클릭하면 '녹음 시작'에서 '녹음 정지'로 명확히 전환되도록 설정
         audio = mic_recorder(
-            start_prompt="▶️ 녹음 시작",
-            stop_prompt="⏹️ 녹음 정지",
+            start_prompt="🔴 녹음 시작 (클릭)",
+            stop_prompt="⏹️ 녹음 정지 및 분석 실행 (클릭)",
             key=f"recorder_{st.session_state.reset_trigger}",
+            use_container_width=True,
         )
 
     with col_rec2:
@@ -277,5 +280,5 @@ with col2:
 
     else:
         st.info(
-            "👈 좌측에서 **[▶️ 녹음 시작]** ➔ 발화 ➔ **[⏹️ 녹음 정지]**를 진행하면, 학생의 음성 데이터를 Praat 알고리즘이 분석하여 이곳에 **실제 음고, 음량, 포만트 데이터 및 맞춤형 역번역 비계**를 생성합니다."
+            "👈 좌측에서 **[🔴 녹음 시작]** ➔ 발화 ➔ **[⏹️ 녹음 정지]**를 진행하면, 학생의 음성 데이터를 Praat 알고리즘이 분석하여 이곳에 **실제 지연 시간 및 맞춤형 역번역 비계**를 생성합니다."
         )
