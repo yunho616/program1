@@ -33,7 +33,7 @@ if "analysis_data" not in st.session_state:
 col1, col2 = st.columns([1, 1])
 
 # =========================================================
-# [LEFT COLUMN] 지문 제시 및 순수 Streamlit 제어
+# [LEFT COLUMN] 지문 제시 및 녹음 제어
 # =========================================================
 with col1:
     st.subheader("📖 1단계: 영어 지문 읽기 및 준비")
@@ -71,81 +71,94 @@ with col1:
     st.markdown("---")
     st.subheader("🎙️ 3단계: 녹음 제어 및 데이터 분석")
 
-    # 순수 버튼 기반 녹음 상태 제어 (브라우저 차단/멈춤 현상 0%)
-    if not st.session_state.is_recording:
-        if st.button(
-            "🔴 [1] 녹음 시작", use_container_width=True, type="primary"
-        ):
-            st.session_state.is_recording = True
-            st.session_state.rec_start_time = time.time()
-            st.rerun()
-    else:
-        rec_duration_now = round(
-            time.time() - st.session_state.rec_start_time, 1
-        )
-        st.warning(
-            f"🎙️ **녹음 진행 중...** (현재 녹음 시간: {rec_duration_now}초)"
-        )
-
-        col_stop1, col_stop2 = st.columns(2)
-
-        with col_stop1:
+    # ---------------------------------------------------------
+    # 실시간 녹음 타이머 위젯 (st.fragment 적용으로 멈춤 없이 0.1초 업데이트)
+    # ---------------------------------------------------------
+    @st.fragment(run_every=0.1)
+    def render_recording_section():
+        if not st.session_state.is_recording:
             if st.button(
-                "⏹️ [2-A] 발화 완료 후 정지",
-                use_container_width=True,
+                "🔴 [1] 녹음 시작", use_container_width=True, type="primary"
             ):
-                end_time = time.time()
-                rec_duration = max(
-                    round(end_time - st.session_state.rec_start_time, 1), 1.0
-                )
-
-                # Latency 계산
-                if st.session_state.prep_start_time:
-                    latency = round(
-                        st.session_state.rec_start_time
-                        - st.session_state.prep_start_time,
-                        1,
-                    )
-                else:
-                    latency = 1.8
-
-                st.session_state.analysis_data = {
-                    "latency": latency,
-                    "duration": rec_duration,
-                    "pause_ratio": 12.5,
-                    "has_voice": True,
-                }
-                st.session_state.is_recording = False
+                st.session_state.is_recording = True
+                st.session_state.rec_start_time = time.time()
                 st.rerun()
+        else:
+            current_dur = round(
+                time.time() - st.session_state.rec_start_time, 1
+            )
+            
+            # 실시간 녹음 시간 전용 UI 박스
+            st.markdown(
+                f"""
+                <div style="background-color: #fff5f5; border: 2px solid #feb2b2; border-radius: 10px; padding: 12px; text-align: center; margin-bottom: 12px;">
+                    <div style="font-size: 13px; color: #c53030; font-weight: bold;">🎙️ 실시간 녹음 진행 중</div>
+                    <div style="font-size: 28px; font-weight: bold; color: #e53e3e; font-family: monospace;">{current_dur:.1f} 초</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
-        with col_stop2:
-            if st.button(
-                "🔇 [2-B] 무음 상태로 정지 (말 안 함)",
-                use_container_width=True,
-            ):
-                end_time = time.time()
-                rec_duration = max(
-                    round(end_time - st.session_state.rec_start_time, 1), 1.0
-                )
+            col_stop1, col_stop2 = st.columns(2)
 
-                if st.session_state.prep_start_time:
-                    latency = round(
-                        st.session_state.rec_start_time
-                        - st.session_state.prep_start_time,
-                        1,
+            with col_stop1:
+                if st.button(
+                    "⏹️ [2-A] 발화 완료 후 정지",
+                    use_container_width=True,
+                ):
+                    end_time = time.time()
+                    rec_duration = max(
+                        round(end_time - st.session_state.rec_start_time, 1), 1.0
                     )
-                else:
-                    latency = 4.5
 
-                # 무음 상태일 경우 Pause Ratio 100% 설정
-                st.session_state.analysis_data = {
-                    "latency": latency,
-                    "duration": rec_duration,
-                    "pause_ratio": 100.0,
-                    "has_voice": False,
-                }
-                st.session_state.is_recording = False
-                st.rerun()
+                    if st.session_state.prep_start_time:
+                        latency = round(
+                            st.session_state.rec_start_time
+                            - st.session_state.prep_start_time,
+                            1,
+                        )
+                    else:
+                        latency = 1.8
+
+                    st.session_state.analysis_data = {
+                        "latency": latency,
+                        "duration": rec_duration,
+                        "pause_ratio": 12.5,
+                        "has_voice": True,
+                    }
+                    st.session_state.is_recording = False
+                    st.rerun()
+
+            with col_stop2:
+                if st.button(
+                    "🔇 [2-B] 무음 상태로 정지 (말 안 함)",
+                    use_container_width=True,
+                ):
+                    end_time = time.time()
+                    rec_duration = max(
+                        round(end_time - st.session_state.rec_start_time, 1), 1.0
+                    )
+
+                    if st.session_state.prep_start_time:
+                        latency = round(
+                            st.session_state.rec_start_time
+                            - st.session_state.prep_start_time,
+                            1,
+                        )
+                    else:
+                        latency = 4.5
+
+                    st.session_state.analysis_data = {
+                        "latency": latency,
+                        "duration": rec_duration,
+                        "pause_ratio": 100.0,
+                        "has_voice": False,
+                    }
+                    st.session_state.is_recording = False
+                    st.rerun()
+
+    # 타이머 위젯 호출
+    render_recording_section()
 
     st.markdown("---")
     if st.button("🗑️ 전체 상태 리셋", use_container_width=True):
