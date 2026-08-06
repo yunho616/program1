@@ -26,6 +26,7 @@ if "final_rec_duration" not in st.session_state:
 if "analysis_data" not in st.session_state:
     st.session_state.analysis_data = None
 
+sample_text = "The quick brown fox jumps over the lazy dog."
 
 # ---------------------------------------------------------
 # 화면 레이아웃 (좌: 지문 및 녹음 제어 / 우: 음성 분석 결과)
@@ -38,7 +39,6 @@ col1, col2 = st.columns([1, 1])
 with col1:
     st.subheader("📖 1단계: 영어 지문 읽기 및 준비")
 
-    sample_text = "The quick brown fox jumps over the lazy dog."
     st.text_area("오늘의 학습 지문", value=sample_text, height=90, disabled=True)
 
     st.markdown("---")
@@ -133,6 +133,19 @@ with col2:
             st.metric(label="🎙️ 음성 총 길이", value=f"{data['duration']} 초")
         with col_m3:
             st.metric(label="⏸️ 망설임 구간 비율", value=f"{data['pause_ratio']}%")
+
+        # ---------------------------------------------------------
+        # 추가 요청 사항: 분석 결과와 비계 사이 학습 지문 재표시
+        # ---------------------------------------------------------
+        st.markdown("---")
+        st.subheader("📖 분석 대상 지문")
+        st.text_area(
+            "학습 대상 영어 지문",
+            value=sample_text,
+            height=70,
+            disabled=True,
+            key="right_col_sample_text",
+        )
 
         st.markdown("---")
         st.subheader("💡 자동 생성된 역번역/어원 비계 (Scaffolding)")
