@@ -99,13 +99,24 @@ with col1:
                     {"word": "The", "start": 0.2, "latency": 0.2},
                     {"word": "quick", "start": 0.6, "latency": 0.4},
                     {"word": "brown", "start": 1.1, "latency": 0.5},
-                    {"word": "fox", "start": 2.2, "latency": 1.1},   # 1초 이상~2초 미만 (약간 망설임)
-                    {"word": "jumps", "start": 4.4, "latency": 2.2}, # 2초 이상 (지연 감지)
+                    {"word": "fox", "start": 2.2, "latency": 1.1},   # 약간 망설임 (1초 이상~2초 미만)
+                    {"word": "jumps", "start": 4.4, "latency": 2.2}, # 지연 감지 (2초 이상)
                     {"word": "over", "start": 5.1, "latency": 0.7},
                     {"word": "the", "start": 5.6, "latency": 0.5},
                     {"word": "lazy", "start": 6.2, "latency": 0.6},
                     {"word": "dog.", "start": 6.9, "latency": 0.7},
                 ]
+
+                # --- 망설임 구간 비율 연산 로직 ---
+                total_words = len(word_latencies)
+                # 원활한 단어 수 (Latency < 1.0초)
+                smooth_words = sum(1 for w in word_latencies if w["latency"] < 1.0)
+                
+                # 망설임 구간 비율 = 100 - (원활한 단어 수 / 전체 단어 수 * 100)
+                if total_words > 0:
+                    pause_ratio = round(100.0 - ((smooth_words / total_words) * 100.0), 1)
+                else:
+                    pause_ratio = 0.0
 
                 max_word_latency = max([w["latency"] for w in word_latencies])
 
@@ -113,7 +124,7 @@ with col1:
                 st.session_state.analysis_data = {
                     "latency": 0.2,  # 첫 단어 발화 지연 시간
                     "duration": rec_duration,
-                    "pause_ratio": 18.5,
+                    "pause_ratio": pause_ratio,
                     "word_analysis": word_latencies,
                     "max_word_latency": max_word_latency,
                 }
@@ -152,7 +163,7 @@ with col2:
             st.metric(label="⏸️ 망설임 구간 비율", value=f"{data['pause_ratio']}%")
 
         # ---------------------------------------------------------
-        # 단어별 Latency 분석 (요청된 기준 적용)
+        # 단어별 Latency 분석
         # ---------------------------------------------------------
         st.markdown("---")
         st.subheader("📖 분석 대상 지문 (단어별 Latency 분석)")
@@ -166,18 +177,15 @@ with col2:
             row_cols = st.columns(cols_per_row)
             for idx, item in enumerate(row_words):
                 with row_cols[idx]:
-                    # 변경된 Latency 분류 기준 적용
-                    # 1) 2.0초 이상 = 지연 감지 (Red)
+                    # Latency 분류 기준 적용
                     if item["latency"] >= 2.0:
                         bg_color = "#fff5f5"
                         border_color = "#e53e3e"
                         tag = "🚨 지연 감지"
-                    # 2) 1.0초 이상 ~ 2.0초 미만 = 약간 망설임 (Orange)
                     elif item["latency"] >= 1.0:
                         bg_color = "#fffaf0"
                         border_color = "#dd6b20"
                         tag = "⚠️ 약간 망설임"
-                    # 3) 1.0초 미만 = 원활 (Green)
                     else:
                         bg_color = "#f0fff4"
                         border_color = "#38a169"
@@ -198,7 +206,6 @@ with col2:
         st.markdown("---")
         st.subheader("💡 자동 생성된 역번역/어원 비계 (Scaffolding)")
 
-        # 특정 단어 Latency가 2.0초 이상이거나 전체 망설임 비율이 높을 때 비계 생성
         is_scaffold_needed = (
             data["max_word_latency"] >= 2.0 or data["pause_ratio"] > 25.0
         )
