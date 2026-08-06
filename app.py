@@ -23,6 +23,8 @@ if "rec_start_time" not in st.session_state:
     st.session_state.rec_start_time = None
 if "is_recording" not in st.session_state:
     st.session_state.is_recording = False
+if "final_rec_duration" not in st.session_state:
+    st.session_state.final_rec_duration = None
 if "analysis_data" not in st.session_state:
     st.session_state.analysis_data = None
 
@@ -51,6 +53,7 @@ with col1:
             st.session_state.prep_start_time = time.time()
             st.session_state.rec_start_time = None
             st.session_state.is_recording = False
+            st.session_state.final_rec_duration = None
             st.session_state.analysis_data = None
             st.rerun()
 
@@ -59,6 +62,7 @@ with col1:
             st.session_state.prep_start_time = None
             st.session_state.rec_start_time = None
             st.session_state.is_recording = False
+            st.session_state.final_rec_duration = None
             st.session_state.analysis_data = None
             st.rerun()
 
@@ -77,18 +81,32 @@ with col1:
     @st.fragment(run_every=0.1)
     def render_recording_section():
         if not st.session_state.is_recording:
+            # 녹음 전/정지 상태
+            if st.session_state.final_rec_duration is not None:
+                # 녹음 완료 후 최종 타이머 표시 유지
+                st.markdown(
+                    f"""
+                    <div style="background-color: #f0fff4; border: 2px solid #68d391; border-radius: 10px; padding: 12px; text-align: center; margin-bottom: 12px;">
+                        <div style="font-size: 13px; color: #276749; font-weight: bold;">🟢 녹음 완료 (총 녹음 시간)</div>
+                        <div style="font-size: 28px; font-weight: bold; color: #2f855a; font-family: monospace;">{st.session_state.final_rec_duration:.1f} 초</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
             if st.button(
-                "🔴 [1] 녹음 시작", use_container_width=True, type="primary"
+                "🔴 녹음 시작", use_container_width=True, type="primary"
             ):
                 st.session_state.is_recording = True
                 st.session_state.rec_start_time = time.time()
+                st.session_state.final_rec_duration = None
                 st.rerun()
         else:
+            # 녹음 진행 중 상태
             current_dur = round(
                 time.time() - st.session_state.rec_start_time, 1
             )
 
-            # 실시간 녹음 시간 UI
             st.markdown(
                 f"""
                 <div style="background-color: #fff5f5; border: 2px solid #feb2b2; border-radius: 10px; padding: 12px; text-align: center; margin-bottom: 12px;">
@@ -99,9 +117,8 @@ with col1:
                 unsafe_allow_html=True,
             )
 
-            # 단일 녹음 정지 버튼
             if st.button(
-                "⏹️ [2] 녹음 정지 및 분석 실행",
+                "⏹️ 녹음 정지 및 분석 실행",
                 use_container_width=True,
             ):
                 end_time = time.time()
@@ -119,6 +136,7 @@ with col1:
                 else:
                     latency = 1.8
 
+                st.session_state.final_rec_duration = rec_duration
                 st.session_state.analysis_data = {
                     "latency": latency,
                     "duration": rec_duration,
@@ -135,6 +153,7 @@ with col1:
         st.session_state.prep_start_time = None
         st.session_state.rec_start_time = None
         st.session_state.is_recording = False
+        st.session_state.final_rec_duration = None
         st.session_state.analysis_data = None
         st.rerun()
 
@@ -192,6 +211,6 @@ with col2:
             })
     else:
         st.info(
-            "👈 좌측에서 **[🔴 1. 녹음 시작]** 후 **[⏹️ 2. 녹음 정지]**를"
+            "👈 좌측에서 **[🔴 녹음 시작]** 후 **[⏹️ 녹음 정지 및 분석 실행]**을"
             " 누르시면 즉시 우측에 분석 데이터와 비계 힌트가 출력됩니다."
         )
