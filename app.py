@@ -239,16 +239,6 @@ with col2:
                 value=f"{data['pause_ratio']}%",
             )
 
-        # 2. Praat (Parselmouth) 추출 데이터 상세 박스
-        st.markdown("#### 🔍 Praat 파셀마우스 정밀 음성 분석")
-        col_p1, col_p2 = st.columns(2)
-        with col_p1:
-            st.info(f"**평균 음고 (Pitch):** {data['pitch']} Hz")
-            st.info(f"**포만트 F1 주파수:** {data['f1']} Hz")
-        with col_p2:
-            st.info(f"**평균 음량 (Intensity):** {data['intensity']} dB")
-            st.info(f"**포만트 F2 주파수:** {data['f2']} Hz")
-
         st.markdown("---")
         st.subheader("💡 자동 생성된 역번역/어원 비계 (Scaffolding)")
 
@@ -257,8 +247,7 @@ with col2:
 
         if is_scaffold_needed:
             st.error(
-                "🚨 발화 지연(3초 초과) 또는 망설임 구간이 감지되어 **[자동 역번역"
-                " 및 어원 비계]**가 작동했습니다."
+                "🚨 발화 지연(3초 초과) 또는 망설임 구간이 감지되어 **[자동 역번역 및 어원 비계]**가 작동했습니다."
             )
 
             st.markdown("### 1. 직독직해 역번역 힌트")
@@ -276,22 +265,17 @@ with col2:
             )
         else:
             st.success(
-                "🎉 매우 원활한 반응속도와 발화 유지력입니다! 힌트 없이 완벽하게"
-                " 수행했습니다."
+                "🎉 매우 원활한 반응속도와 발화 유지력입니다! 힌트 없이 완벽하게 수행했습니다."
             )
             st.json(
                 {
                     "표현 확장 팁": (
-                        "'jumps over' 대신 'clears' 또는 'leaps over' 표현을"
-                        " 사용할 수 있습니다."
+                        "'jumps over' 대신 'clears' 또는 'leaps over' 표현을 사용할 수 있습니다."
                     )
                 }
             )
 
     else:
         st.info(
-            "👈 좌측에서 **[▶️ 녹음 시작]** ➔ 발화 ➔ **[⏹️ 녹음 정지]**를"
-            " 진행하면, 학생의 음성 데이터를 Praat 알고리즘이 분석하여 이곳에"
-            " **실제 음고, 음량, 포만트 데이터 및 맞춤형 역번역 비계**를"
-            " 생성합니다."
+            "👈 좌측에서 **[▶️ 녹음 시작]** ➔ 발화 ➔ **[⏹️ 녹음 정지]**를 진행하면, 학생의 음성 데이터를 Praat 알고리즘이 분석하여 이곳에 **실제 음고, 음량, 포만트 데이터 및 맞춤형 역번역 비계**를 생성합니다."
         )
