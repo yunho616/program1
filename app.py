@@ -17,8 +17,6 @@ st.caption(
 st.markdown("---")
 
 # 2. 세션 상태(Session State) 초기화
-if "prep_start_time" not in st.session_state:
-    st.session_state.prep_start_time = None
 if "rec_start_time" not in st.session_state:
     st.session_state.rec_start_time = None
 if "is_recording" not in st.session_state:
@@ -44,36 +42,7 @@ with col1:
     st.text_area("오늘의 학습 지문", value=sample_text, height=90, disabled=True)
 
     st.markdown("---")
-    st.subheader("⏱️ 2단계: 발화 준비 및 타이머")
-
-    col_btn1, col_btn2 = st.columns([1, 1])
-
-    with col_btn1:
-        if st.button("▶️ 지문 읽기 시작 (타이머 시작)", use_container_width=True):
-            st.session_state.prep_start_time = time.time()
-            st.session_state.rec_start_time = None
-            st.session_state.is_recording = False
-            st.session_state.final_rec_duration = None
-            st.session_state.analysis_data = None
-            st.rerun()
-
-    with col_btn2:
-        if st.button("🔄 준비 초기화", use_container_width=True):
-            st.session_state.prep_start_time = None
-            st.session_state.rec_start_time = None
-            st.session_state.is_recording = False
-            st.session_state.final_rec_duration = None
-            st.session_state.analysis_data = None
-            st.rerun()
-
-    if st.session_state.prep_start_time:
-        elapsed_prep = round(time.time() - st.session_state.prep_start_time, 1)
-        st.info(f"⏱️ 발화 준비 시작 후 **{elapsed_prep}초** 경과했습니다.")
-    else:
-        st.info("💡 **[▶️ 지문 읽기 시작]** 버튼을 눌러 준비 시간을 측정하세요.")
-
-    st.markdown("---")
-    st.subheader("🎙️ 3단계: 녹음 제어 및 데이터 분석")
+    st.subheader("🎙️ 2단계: 녹음 제어 및 데이터 분석")
 
     # ---------------------------------------------------------
     # 실시간 녹음 타이머 위젯 (st.fragment 적용으로 0.1초 업데이트)
@@ -81,9 +50,8 @@ with col1:
     @st.fragment(run_every=0.1)
     def render_recording_section():
         if not st.session_state.is_recording:
-            # 녹음 전/정지 상태
+            # 녹음 완료 후 최종 타이머 표시 유지
             if st.session_state.final_rec_duration is not None:
-                # 녹음 완료 후 최종 타이머 표시 유지
                 st.markdown(
                     f"""
                     <div style="background-color: #f0fff4; border: 2px solid #68d391; border-radius: 10px; padding: 12px; text-align: center; margin-bottom: 12px;">
@@ -126,19 +94,9 @@ with col1:
                     round(end_time - st.session_state.rec_start_time, 1), 1.0
                 )
 
-                # Latency(반응 지연 시간) 계산
-                if st.session_state.prep_start_time:
-                    latency = round(
-                        st.session_state.rec_start_time
-                        - st.session_state.prep_start_time,
-                        1,
-                    )
-                else:
-                    latency = 1.8
-
                 st.session_state.final_rec_duration = rec_duration
                 st.session_state.analysis_data = {
-                    "latency": latency,
+                    "latency": 1.5,  # 기준 지연 시간
                     "duration": rec_duration,
                     "pause_ratio": 12.5,
                 }
@@ -150,7 +108,6 @@ with col1:
 
     st.markdown("---")
     if st.button("🗑️ 전체 상태 리셋", use_container_width=True):
-        st.session_state.prep_start_time = None
         st.session_state.rec_start_time = None
         st.session_state.is_recording = False
         st.session_state.final_rec_duration = None
