@@ -72,7 +72,7 @@ with col1:
     st.subheader("🎙️ 3단계: 녹음 제어 및 데이터 분석")
 
     # ---------------------------------------------------------
-    # 실시간 녹음 타이머 위젯 (st.fragment 적용으로 멈춤 없이 0.1초 업데이트)
+    # 실시간 녹음 타이머 위젯 (st.fragment 적용으로 0.1초 업데이트)
     # ---------------------------------------------------------
     @st.fragment(run_every=0.1)
     def render_recording_section():
@@ -87,8 +87,8 @@ with col1:
             current_dur = round(
                 time.time() - st.session_state.rec_start_time, 1
             )
-            
-            # 실시간 녹음 시간 전용 UI 박스
+
+            # 실시간 녹음 시간 UI
             st.markdown(
                 f"""
                 <div style="background-color: #fff5f5; border: 2px solid #feb2b2; border-radius: 10px; padding: 12px; text-align: center; margin-bottom: 12px;">
@@ -99,65 +99,35 @@ with col1:
                 unsafe_allow_html=True,
             )
 
-            col_stop1, col_stop2 = st.columns(2)
+            # 단일 녹음 정지 버튼
+            if st.button(
+                "⏹️ [2] 녹음 정지 및 분석 실행",
+                use_container_width=True,
+            ):
+                end_time = time.time()
+                rec_duration = max(
+                    round(end_time - st.session_state.rec_start_time, 1), 1.0
+                )
 
-            with col_stop1:
-                if st.button(
-                    "⏹️ [2-A] 발화 완료 후 정지",
-                    use_container_width=True,
-                ):
-                    end_time = time.time()
-                    rec_duration = max(
-                        round(end_time - st.session_state.rec_start_time, 1), 1.0
+                # Latency(반응 지연 시간) 계산
+                if st.session_state.prep_start_time:
+                    latency = round(
+                        st.session_state.rec_start_time
+                        - st.session_state.prep_start_time,
+                        1,
                     )
+                else:
+                    latency = 1.8
 
-                    if st.session_state.prep_start_time:
-                        latency = round(
-                            st.session_state.rec_start_time
-                            - st.session_state.prep_start_time,
-                            1,
-                        )
-                    else:
-                        latency = 1.8
+                st.session_state.analysis_data = {
+                    "latency": latency,
+                    "duration": rec_duration,
+                    "pause_ratio": 12.5,
+                }
+                st.session_state.is_recording = False
+                st.rerun()
 
-                    st.session_state.analysis_data = {
-                        "latency": latency,
-                        "duration": rec_duration,
-                        "pause_ratio": 12.5,
-                        "has_voice": True,
-                    }
-                    st.session_state.is_recording = False
-                    st.rerun()
-
-            with col_stop2:
-                if st.button(
-                    "🔇 [2-B] 무음 상태로 정지 (말 안 함)",
-                    use_container_width=True,
-                ):
-                    end_time = time.time()
-                    rec_duration = max(
-                        round(end_time - st.session_state.rec_start_time, 1), 1.0
-                    )
-
-                    if st.session_state.prep_start_time:
-                        latency = round(
-                            st.session_state.rec_start_time
-                            - st.session_state.prep_start_time,
-                            1,
-                        )
-                    else:
-                        latency = 4.5
-
-                    st.session_state.analysis_data = {
-                        "latency": latency,
-                        "duration": rec_duration,
-                        "pause_ratio": 100.0,
-                        "has_voice": False,
-                    }
-                    st.session_state.is_recording = False
-                    st.rerun()
-
-    # 타이머 위젯 호출
+    # 타이머 위젯 실행
     render_recording_section()
 
     st.markdown("---")
@@ -192,15 +162,13 @@ with col2:
         st.subheader("💡 자동 생성된 역번역/어원 비계 (Scaffolding)")
 
         is_scaffold_needed = (
-            data["latency"] > 3.0
-            or data["pause_ratio"] > 25.0
-            or not data["has_voice"]
+            data["latency"] > 3.0 or data["pause_ratio"] > 25.0
         )
 
         if is_scaffold_needed:
             st.error(
-                "🚨 **발화 지연 / 무음(망설임 100%)** 감지! 자동 역번역 및"
-                " 어원 비계가 활성화되었습니다."
+                "🚨 **발화 지연(3초 초과)** 감지! 자동 역번역 및 어원"
+                " 비계가 활성화되었습니다."
             )
             st.markdown("### 1. 직독직해 역번역 힌트")
             st.info(
@@ -224,6 +192,6 @@ with col2:
             })
     else:
         st.info(
-            "👈 좌측에서 **[🔴 1. 녹음 시작]** 후 **[정지]** 버튼을 누르시면"
-            " 즉시 우측에 분석 데이터와 비계 힌트가 출력됩니다."
+            "👈 좌측에서 **[🔴 1. 녹음 시작]** 후 **[⏹️ 2. 녹음 정지]**를"
+            " 누르시면 즉시 우측에 분석 데이터와 비계 힌트가 출력됩니다."
         )
