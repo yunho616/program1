@@ -3,3 +3,4 @@ streamlit-mic-recorder
 praat-parselmouth
 pandas
 pydub
+numpy
