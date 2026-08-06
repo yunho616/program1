@@ -94,24 +94,24 @@ with col1:
                     round(end_time - st.session_state.rec_start_time, 1), 1.0
                 )
 
-                # 단어별 타임스탬프 및 Latency 데이터 생성 (모의 음성 처리 엔진 데이터)
+                # 단어별 타임스탬프 및 Latency 데이터 생성
                 word_latencies = [
-                    {"word": "The", "start": 0.2, "latency": 0.2, "status": "Good", "score": 98},
-                    {"word": "quick", "start": 0.6, "latency": 0.4, "status": "Good", "score": 95},
-                    {"word": "brown", "start": 1.1, "latency": 0.5, "status": "Good", "score": 92},
-                    {"word": "fox", "start": 1.8, "latency": 0.7, "status": "Warning", "score": 78},
-                    {"word": "jumps", "start": 3.4, "latency": 1.6, "status": "Delay", "score": 64},  # 망설임 구간 발생
-                    {"word": "over", "start": 4.1, "latency": 0.7, "status": "Good", "score": 90},
-                    {"word": "the", "start": 4.6, "latency": 0.5, "status": "Good", "score": 96},
-                    {"word": "lazy", "start": 5.2, "latency": 0.6, "status": "Good", "score": 88},
-                    {"word": "dog.", "start": 5.9, "latency": 0.7, "status": "Good", "score": 94},
+                    {"word": "The", "start": 0.2, "latency": 0.2, "status": "Good"},
+                    {"word": "quick", "start": 0.6, "latency": 0.4, "status": "Good"},
+                    {"word": "brown", "start": 1.1, "latency": 0.5, "status": "Good"},
+                    {"word": "fox", "start": 1.8, "latency": 0.7, "status": "Warning"},
+                    {"word": "jumps", "start": 3.4, "latency": 1.6, "status": "Delay"},  # 망설임 구간 발생
+                    {"word": "over", "start": 4.1, "latency": 0.7, "status": "Good"},
+                    {"word": "the", "start": 4.6, "latency": 0.5, "status": "Good"},
+                    {"word": "lazy", "start": 5.2, "latency": 0.6, "status": "Good"},
+                    {"word": "dog.", "start": 5.9, "latency": 0.7, "status": "Good"},
                 ]
 
                 max_word_latency = max([w["latency"] for w in word_latencies])
 
                 st.session_state.final_rec_duration = rec_duration
                 st.session_state.analysis_data = {
-                    "latency": 0.2,  # 최초 첫 단어 발화 지연 시간
+                    "latency": 0.2,  # 첫 단어 발화 지연 시간
                     "duration": rec_duration,
                     "pause_ratio": 18.5,
                     "word_analysis": word_latencies,
@@ -152,7 +152,7 @@ with col2:
             st.metric(label="⏸️ 망설임 구간 비율", value=f"{data['pause_ratio']}%")
 
         # ---------------------------------------------------------
-        # 단어별 Latency 분석 테이블 및 카드 표출
+        # 단어별 Latency 분석 (점수 표시 제외)
         # ---------------------------------------------------------
         st.markdown("---")
         st.subheader("📖 분석 대상 지문 (단어별 Latency 분석)")
@@ -186,7 +186,7 @@ with col2:
                             <div style="font-size: 16px; font-weight: bold; color: #2d3748;">{item['word']}</div>
                             <div style="font-size: 12px; color: #718096; margin-top: 4px;">시작 시점: <b>{item['start']}초</b></div>
                             <div style="font-size: 13px; font-weight: bold; color: {border_color}; margin-top: 2px;">Latency: {item['latency']}초</div>
-                            <div style="font-size: 11px; margin-top: 4px;">{tag} ({item['score']}점)</div>
+                            <div style="font-size: 11px; margin-top: 4px; font-weight: 500;">{tag}</div>
                         </div>
                         """,
                         unsafe_allow_html=True,
@@ -195,7 +195,6 @@ with col2:
         st.markdown("---")
         st.subheader("💡 자동 생성된 역번역/어원 비계 (Scaffolding)")
 
-        # 특정 단어에서 1.2초 이상 Latency가 발생하거나 전체 지연률이 높아진 경우 비계 트리거
         is_scaffold_needed = (
             data["max_word_latency"] >= 1.2 or data["pause_ratio"] > 25.0
         )
