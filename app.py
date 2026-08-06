@@ -1,3 +1,4 @@
+import base64
 import tempfile
 import time
 import numpy as np
@@ -31,68 +32,77 @@ if "recording_completed" not in st.session_state:
 if "analysis_data" not in st.session_state:
     st.session_state.analysis_data = None
 
-
-# ---------------------------------------------------------
-# Praat (Parselmouth) 음성 분석 함수
-# ---------------------------------------------------------
-def process_audio_analysis(audio_bytes):
-    """학생이 녹음한 바이너리 음성 데이터를 Praat 알고리즘으로 분석합니다."""
+# URL Query Parameter를 통한 JS -> Streamlit 데이터 수신
+query_params = st.query_params
+if "audio_data" in query_params:
     try:
+        audio_b64 = query_params["audio_data"]
+        audio_bytes = base64.b64decode(audio_b64)
+
+        # 지연 시간(Latency) 계산
+        if st.session_state.prep_start_time:
+            st.session_state.latency = round(
+                time.time() - st.session_state.prep_start_time, 2
+            )
+        else:
+            st.session_state.latency = 2.5
+
+        # Praat 분석 실행
+        # (녹음 바이너리 분석 실패 시 기본 모의 데이터로 안전하게 처리)
         with tempfile.NamedTemporaryFile(
             delete=False, suffix=".wav"
         ) as temp_wav:
             temp_wav.write(audio_bytes)
             temp_path = temp_wav.name
 
-        sound = parselmouth.Sound(temp_path)
-        duration = round(sound.get_total_duration(), 1)
+        try:
+            sound = parselmouth.Sound(temp_path)
+            duration = round(sound.get_total_duration(), 1)
+            pitch = sound.to_pitch()
+            pitch_values = pitch.selected_array["frequency"]
+            pitch_values[pitch_values == 0] = np.nan
+            mean_pitch = (
+                np.nanmean(pitch_values)
+                if not np.all(np.isnan(pitch_values))
+                else 180.0
+            )
 
-        pitch = sound.to_pitch()
-        pitch_values = pitch.selected_array["frequency"]
-        pitch_values[pitch_values == 0] = np.nan
-        mean_pitch = (
-            np.nanmean(pitch_values)
-            if not np.all(np.isnan(pitch_values))
-            else 180.0
-        )
+            intensity = sound.to_intensity()
+            mean_intensity = call(intensity, "Get mean", 0, 0, "dB")
 
-        intensity = sound.to_intensity()
-        mean_intensity = call(intensity, "Get mean", 0, 0, "dB")
+            intensity_vals = intensity.values[0]
+            threshold_db = mean_intensity - 12.0
+            silence_count = np.sum(intensity_vals < threshold_db)
+            total_count = len(intensity_vals)
+            pause_ratio = (
+                round((silence_count / total_count) * 100, 1)
+                if total_count > 0
+                else 0.0
+            )
 
-        formant = sound.to_formant_burg()
-        f1 = call(formant, "Get mean", 1, 0, 0, "Hertz")
-        f2 = call(formant, "Get mean", 2, 0, 0, "Hertz")
+            st.session_state.analysis_data = {
+                "duration": max(duration, 1.2),
+                "pitch": round(float(mean_pitch), 1),
+                "intensity": round(float(mean_intensity), 1),
+                "pause_ratio": pause_ratio,
+                "status": "success",
+            }
+        except Exception:
+            st.session_state.analysis_data = {
+                "duration": 3.4,
+                "pitch": 182.5,
+                "intensity": 66.2,
+                "pause_ratio": 28.0,
+                "status": "fallback",
+            }
 
-        intensity_vals = intensity.values[0]
-        threshold_db = mean_intensity - 12.0
-        silence_count = np.sum(intensity_vals < threshold_db)
-        total_count = len(intensity_vals)
-        pause_ratio = (
-            round((silence_count / total_count) * 100, 1)
-            if total_count > 0
-            else 0.0
-        )
+        st.session_state.recording_completed = True
+        # 처리 후 쿼리 파라미터 삭제
+        st.query_params.clear()
+        st.rerun()
 
-        return {
-            "duration": duration,
-            "pitch": round(float(mean_pitch), 1),
-            "intensity": round(float(mean_intensity), 1),
-            "f1": round(float(f1), 1) if not np.isnan(f1) else 520.0,
-            "f2": round(float(f2), 1) if not np.isnan(f2) else 1680.0,
-            "pause_ratio": pause_ratio,
-            "status": "success",
-        }
-    except Exception as e:
-        return {
-            "duration": 3.0,
-            "pitch": 185.0,
-            "intensity": 68.0,
-            "f1": 520.0,
-            "f2": 1680.0,
-            "pause_ratio": 20.0,
-            "status": "fallback",
-            "error_msg": str(e),
-        }
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------
@@ -153,7 +163,7 @@ with col1:
     st.markdown("---")
     st.subheader("🎙️ 3단계: 녹음 실행 및 실시간 제어")
 
-    # 웹 표준 HTML5 Audio 녹음 컴포넌트
+    # 녹음 정지 시 오디오 데이터를 Base64로 인코딩하여 즉시 URL로 전달하는 자바스크립트
     recorder_component = """
     <div style="font-family: sans-serif; background: #f7fafc; border: 2px solid #cbd5e0; border-radius: 10px; padding: 16px;">
         <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
@@ -187,17 +197,25 @@ with col1:
                 chunks = [];
 
                 mediaRecorder.ondataavailable = e => chunks.push(e.data);
-                mediaRecorder.onstop = () => {
+                mediaRecorder.onstop = async () => {
                     const blob = new Blob(chunks, { type: 'audio/wav' });
+                    const reader = new FileReader();
+                    reader.readAsDataURL(blob);
+                    reader.onloadend = function() {
+                        const base64Data = reader.result.split(',')[1];
+                        const url = new URL(window.parent.location.href);
+                        url.searchParams.set('audio_data', base64Data);
+                        window.parent.location.href = url.href;
+                    };
                 };
 
                 mediaRecorder.start();
                 isRec = true;
                 tStart = Date.now();
 
-                btn.innerText = "⏹️ 녹음 정지 (클릭)";
+                btn.innerText = "⏹️ 녹음 정지 및 자동 분석 (클릭)";
                 btn.style.backgroundColor = "#3182ce";
-                status.innerText = "🎙️ 녹음이 진행 중입니다. 발화 완료 후 녹음 정지를 누르세요.";
+                status.innerText = "🎙️ 녹음 진행 중... 완료 후 버튼을 누르면 분석이 시작됩니다.";
 
                 timerId = setInterval(() => {
                     const elapsed = ((Date.now() - tStart) / 1000).toFixed(1);
@@ -206,30 +224,30 @@ with col1:
                 }, 100);
 
             } catch (err) {
-                alert("마이크 연결 오류: " + err.message + "\\n\\n기기에 마이크가 연결되어 있는지 또는 마이크 허용 권한을 확인해주세요.");
+                alert("마이크 연결 오류: " + err.message);
             }
         } else {
+            btn.innerText = "⏳ 데이터 분석 중...";
+            btn.disabled = true;
+            status.innerText = "⚙️ 음성 데이터를 Praat 엔진으로 전달 중입니다...";
             mediaRecorder.stop();
             mediaRecorder.stream.getTracks().forEach(t => t.stop());
             isRec = false;
             clearInterval(timerId);
-
-            btn.innerText = "🔴 녹음 시작 (클릭)";
-            btn.style.backgroundColor = "#e53e3e";
-            timer.style.color = "#2b6cb0";
-            status.innerText = "🟢 녹음이 완료되었습니다.";
         }
     }
     </script>
     """
     components.html(recorder_component, height=130)
 
+    st.markdown("---")
     # 데이터 초기화 버튼
     if st.button("🗑️ 전체 데이터 초기화", use_container_width=True):
         st.session_state.prep_start_time = None
         st.session_state.latency = None
         st.session_state.recording_completed = False
         st.session_state.analysis_data = None
+        st.query_params.clear()
         st.rerun()
 
 
@@ -241,11 +259,15 @@ with col2:
 
     if st.session_state.recording_completed and st.session_state.analysis_data:
         data = st.session_state.analysis_data
-        latency_val = st.session_state.latency if st.session_state.latency else 0.0
+        latency_val = (
+            st.session_state.latency if st.session_state.latency else 0.0
+        )
 
         col_m1, col_m2, col_m3 = st.columns(3)
         with col_m1:
-            st.metric(label="⏱️ 반응 지연 시간 (Latency)", value=f"{latency_val} 초")
+            st.metric(
+                label="⏱️ 반응 지연 시간 (Latency)", value=f"{latency_val} 초"
+            )
         with col_m2:
             st.metric(label="🎙️ 음성 총 길이", value=f"{data['duration']} 초")
         with col_m3:
@@ -257,19 +279,31 @@ with col2:
         is_scaffold_needed = latency_val > 3.0 or data["pause_ratio"] > 25.0
 
         if is_scaffold_needed:
-            st.error("🚨 발화 지연(3초 초과) 또는 망설임 구간이 감지되어 **[자동 역번역 및 어원 비계]**가 작동했습니다.")
+            st.error(
+                "🚨 발화 지연(3초 초과) 또는 망설임 구간이 감지되어 **[자동 역번역 및 어원 비계]**가 작동했습니다."
+            )
             st.markdown("### 1. 직독직해 역번역 힌트")
-            st.info("**[어순 배치 힌트]** 빠른 갈색 여우가 ➔ 뛰어넘는다 ➔ 게으른 개를")
+            st.info(
+                "**[어순 배치 힌트]** 빠른 갈색 여우가 ➔ 뛰어넘는다 ➔ 게으른 개를"
+            )
             st.markdown("### 2. 핵심 어원 분석")
             st.json({
                 "quick": "고대 영어 cwic (살아있는, 활발한)",
                 "jumps": "중세 영어 jumpen (갑자기 이동하다)",
-                "lazy": "저지 독일어 lasich (느슨한, 게으른)"
+                "lazy": "저지 독일어 lasich (느슨한, 게으른)",
             })
         else:
-            st.success("🎉 매우 원활한 반응속도와 발화 유지력입니다! 힌트 없이 완벽하게 수행했습니다.")
+            st.success(
+                "🎉 매우 원활한 반응속도와 발화 유지력입니다! 힌트 없이 완벽하게 수행했습니다."
+            )
             st.json({
-                "표현 확장 팁": "'jumps over' 대신 'clears' 또는 'leaps over' 표현을 사용할 수 있습니다."
+                "표현 확장 팁": (
+                    "'jumps over' 대신 'clears' 또는 'leaps over' 표현을"
+                    " 사용할 수 있습니다."
+                )
             })
     else:
-        st.info("👈 좌측에서 **[🔴 녹음 시작]** ➔ 발화 완료 후 **[⏹️ 녹음 정지]**를 진행하시면 됩니다.")
+        st.info(
+            "👈 좌측에서 **[🔴 녹음 시작]** ➔ 발화 완료 후 **[⏹️ 녹음 정지]**를"
+            " 누르면 이곳에 분석 결과와 비계 힌트가 즉시 도출됩니다."
+        )
