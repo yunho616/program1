@@ -21,7 +21,7 @@ st.caption(
 )
 st.markdown("---")
 
-# 2. 세션 상태(Session State) 및 URL 파라미터 제어
+# 2. 세션 상태(Session State) 초기화
 if "prep_start_time" not in st.session_state:
     st.session_state.prep_start_time = None
 if "latency" not in st.session_state:
@@ -153,7 +153,7 @@ with col1:
     st.markdown("---")
     st.subheader("🎙️ 3단계: 녹음 실행 및 실시간 제어")
 
-    # 웹 표준 HTML5 Audio 녹음 컴포넌트 (버튼 클릭 시 즉시 녹음 중/정지로 토글 전환)
+    # 웹 표준 HTML5 Audio 녹음 컴포넌트
     recorder_component = """
     <div style="font-family: sans-serif; background: #f7fafc; border: 2px solid #cbd5e0; border-radius: 10px; padding: 16px;">
         <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
@@ -189,16 +189,15 @@ with col1:
                 mediaRecorder.ondataavailable = e => chunks.push(e.data);
                 mediaRecorder.onstop = () => {
                     const blob = new Blob(chunks, { type: 'audio/wav' });
-                    // 필요 시 데이터 전송 처리
                 };
 
                 mediaRecorder.start();
                 isRec = true;
                 tStart = Date.now();
 
-                btn.innerText = "⏹️ 녹음 정지 및 분석 실행 (클릭)";
+                btn.innerText = "⏹️ 녹음 정지 (클릭)";
                 btn.style.backgroundColor = "#3182ce";
-                status.innerText = "🎙️ 녹음이 진행 중입니다. 발화 후 정지 버튼을 누르세요.";
+                status.innerText = "🎙️ 녹음이 진행 중입니다. 발화 완료 후 녹음 정지를 누르세요.";
 
                 timerId = setInterval(() => {
                     const elapsed = ((Date.now() - tStart) / 1000).toFixed(1);
@@ -207,7 +206,7 @@ with col1:
                 }, 100);
 
             } catch (err) {
-                alert("마이크 연결 오류: " + err.message);
+                alert("마이크 연결 오류: " + err.message + "\\n\\n기기에 마이크가 연결되어 있는지 또는 마이크 허용 권한을 확인해주세요.");
             }
         } else {
             mediaRecorder.stop();
@@ -218,7 +217,7 @@ with col1:
             btn.innerText = "🔴 녹음 시작 (클릭)";
             btn.style.backgroundColor = "#e53e3e";
             timer.style.color = "#2b6cb0";
-            status.innerText = "🟢 녹음이 완료되었습니다. 분석 결과를 확인하세요.";
+            status.innerText = "🟢 녹음이 완료되었습니다.";
         }
     }
     </script>
@@ -231,25 +230,6 @@ with col1:
         st.session_state.latency = None
         st.session_state.recording_completed = False
         st.session_state.analysis_data = None
-        st.rerun()
-
-    # 테스트 및 분석 실행용 수동 트리거
-    st.markdown("---")
-    if st.button("⚡ 녹음 데이터 실시간 분석 실행", use_container_width=True, type="primary"):
-        st.session_state.recording_completed = True
-        st.session_state.analysis_data = {
-            "duration": 4.2,
-            "pitch": 182.5,
-            "intensity": 65.4,
-            "f1": 510.0,
-            "f2": 1650.0,
-            "pause_ratio": 28.5,
-            "status": "success"
-        }
-        if st.session_state.prep_start_time:
-            st.session_state.latency = round(time.time() - st.session_state.prep_start_time, 2)
-        else:
-            st.session_state.latency = 3.8
         st.rerun()
 
 
@@ -292,4 +272,4 @@ with col2:
                 "표현 확장 팁": "'jumps over' 대신 'clears' 또는 'leaps over' 표현을 사용할 수 있습니다."
             })
     else:
-        st.info("👈 좌측에서 **[🔴 녹음 시작]** ➔ 발화 ➔ **[⏹️ 녹음 정지]** 진행 후 **[⚡ 녹음 데이터 실시간 분석 실행]**을 클릭하시면 이곳에 데이터 결과 및 역번역 비계가 도출됩니다.")
+        st.info("👈 좌측에서 **[🔴 녹음 시작]** ➔ 발화 완료 후 **[⏹️ 녹음 정지]**를 진행하시면 됩니다.")
