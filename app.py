@@ -78,7 +78,7 @@ etymology_db = {
 
 
 # ---------------------------------------------------------
-# [브라우저 마이크 음성 수집용 숨김 HTML/JS 컴포넌트] - Auto Gain 적용
+# [브라우저 마이크 음성 수집용 숨김 HTML/JS 컴포넌트] - webm/opus 및 오디오 변환 지원
 # ---------------------------------------------------------
 def hidden_audio_recorder(is_recording):
     js_code = f"""
@@ -88,7 +88,6 @@ def hidden_audio_recorder(is_recording):
 
     async function startRecording() {{
         try {{
-            // 작은 음성 신호를 위해 autoGainControl, noiseSuppression 옵션 추가
             const stream = await navigator.mediaDevices.getUserMedia({{ 
                 audio: {{
                     autoGainControl: true,
@@ -97,7 +96,17 @@ def hidden_audio_recorder(is_recording):
                 }} 
             }});
             audioChunks = [];
-            mediaRecorder = new MediaRecorder(stream);
+            
+            // 브라우저 호환성에 따라 audio/webm;codecs=opus 지원 여부 확인
+            let options = {{ mimeType: 'audio/webm;codecs=opus' }};
+            if (!MediaRecorder.isTypeSupported(options.mimeType)) {{
+                options = {{ mimeType: 'audio/webm' }};
+                if (!MediaRecorder.isTypeSupported(options.mimeType)) {{
+                    options = {{}}; // 브라우저 기본값 사용
+                }}
+            }}
+
+            mediaRecorder = new MediaRecorder(stream, options);
             window._mediaRecorder = mediaRecorder;
             window._audioChunks = audioChunks;
 
@@ -107,7 +116,7 @@ def hidden_audio_recorder(is_recording):
                 }}
             }};
             mediaRecorder.start(100);
-        }} catch (err) {{
+        } catch (err) {{
             console.error("마이크 권한 오류:", err);
         }}
     }}
@@ -115,7 +124,9 @@ def hidden_audio_recorder(is_recording):
     async function stopRecording() {{
         if (mediaRecorder && mediaRecorder.state !== "inactive") {{
             mediaRecorder.onstop = async () => {{
-                const audioBlob = new Blob(audioChunks, {{ type: 'audio/wav' }});
+                const mimeType = mediaRecorder.mimeType || 'audio/webm';
+                const audioBlob = new Blob(audioChunks, {{ type: mimeType }});
+                
                 const reader = new FileReader();
                 reader.readAsDataURL(audioBlob);
                 reader.onloadend = () => {{
@@ -141,11 +152,23 @@ def hidden_audio_recorder(is_recording):
 
 
 # ---------------------------------------------------------
-# [실제 발음 데이터 기반 Latency 분석 함수] - 고감도(High Sensitivity) 적용
+# [실제 발음 데이터 기반 Latency 분석 함수]
 # ---------------------------------------------------------
 def analyze_audio_bytes(audio_bytes):
     try:
-        wav_file = wave.open(io.BytesIO(audio_bytes), "rb")
+        # webm 컨테이너 형식일 수 있으므로 pydub를 우선 활용하여 wav PCM으로 안전하게 변환 후 분석
+        try:
+            from pydub import AudioSegment
+            audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes))
+            audio_segment = audio_segment.set_channels(1).set_frame_rate(16000)
+            wav_io = io.BytesIO()
+            audio_segment.export(wav_io, format="wav")
+            wav_io.seek(0)
+            wav_file = wave.open(wav_io, "rb")
+        except Exception:
+            # 기본 wave 파일 직접 읽기 시도
+            wav_file = wave.open(io.BytesIO(audio_bytes), "rb")
+
         nchannels = wav_file.getnchannels()
         sampwidth = wav_file.getsampwidth()
         framerate = wav_file.getframerate()
@@ -153,6 +176,7 @@ def analyze_audio_bytes(audio_bytes):
 
         total_duration = round(nframes / float(framerate), 1)
         if total_duration <= 0.3:
+            wav_file.close()
             return None
 
         frame_duration = 0.05
@@ -172,8 +196,6 @@ def analyze_audio_bytes(audio_bytes):
             return None
 
         max_rms = max(chunk_rms) if max(chunk_rms) > 0 else 1
-
-        # 🎯 [핵심 변경] 작은 소리도 인식하도록 임계값(Threshold)을 대폭 낮춤
         threshold = max(max_rms * 0.08, 50)
 
         speech_intervals = []
@@ -349,7 +371,7 @@ with col2:
 
     if st.session_state.recorded_audio_bytes is not None:
         st.markdown("##### 🔊 녹음된 음성 재생")
-        st.audio(st.session_state.recorded_audio_bytes, format="audio/wav")
+        st.audio(st.session_state.recorded_audio_bytes, format="audio/webm")
         st.markdown("---")
 
     if st.session_state.analysis_data == "NO_SPEECH":
