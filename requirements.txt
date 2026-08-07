@@ -1,6 +1,4 @@
 streamlit>=1.30.0
 audio-recorder-streamlit>=0.0.8
-librosa
-soundfile
 numpy
 pandas
