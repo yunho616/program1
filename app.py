@@ -1,7 +1,7 @@
+import io
 import time
 import wave
 import audioop
-import struct
 import streamlit as st
 from audio_recorder_streamlit import audio_recorder
 
@@ -36,7 +36,7 @@ target_words = [
     "The", "fox", "is", "very", "fast."
 ]
 
-# 어원 DB (실제 서비스 확장용 사전 데이터)
+# 어원 DB
 etymology_db = {
     "The": "고대 영어 þæt (지시대명사/정관사)",
     "quick": "고대 영어 cwic (살아있는, 활발한)",
@@ -55,17 +55,9 @@ etymology_db = {
 
 # ---------------------------------------------------------
 # [실제 발음 데이터 기반 Latency 분석 함수]
-# Python 기본 wave/audioop 모듈 기반 (추가 c-library 불필요)
 # ---------------------------------------------------------
 def analyze_audio_bytes(audio_bytes):
-    """
-    실제 녹음된 음성 바이트(WAV) 데이터를 읽어
-    음성 파형의 RMS(Root Mean Square) 데시벨/에너지를 측정하고
-    무음(Silence) 및 단어별 지연시간(Latency)을 정밀 계산합니다.
-    """
     try:
-        # WAV 파싱을 위한 in-memory 바이너리 스트림
-        import io
         wav_file = wave.open(io.BytesIO(audio_bytes), "rb")
         nchannels = wav_file.getnchannels()
         sampwidth = wav_file.getsampwidth()
@@ -73,7 +65,7 @@ def analyze_audio_bytes(audio_bytes):
         nframes = wav_file.getnframes()
 
         total_duration = round(nframes / float(framerate), 1)
-        if total_duration <= 0.5:
+        if total_duration <= 0.3:
             return None
 
         # 50ms (0.05초) 단위 프레임 분할 분석
@@ -85,7 +77,6 @@ def analyze_audio_bytes(audio_bytes):
             frames = wav_file.readframes(frame_size)
             if len(frames) < frame_size * sampwidth * nchannels:
                 break
-            # 음량 RMS 에너지 계산
             rms = audioop.rms(frames, sampwidth)
             chunk_rms.append(rms)
 
@@ -94,11 +85,9 @@ def analyze_audio_bytes(audio_bytes):
         if not chunk_rms:
             return None
 
-        # 임계값 설정 (상위 음량 대비 15% 수준 이하를 무음으로 간주)
         max_rms = max(chunk_rms) if max(chunk_rms) > 0 else 1
         threshold = max(max_rms * 0.15, 300)
 
-        # 발화(Non-silence) 구간 및 무음(Silence) 구간 프레임 매핑
         speech_intervals = []
         in_speech = False
         start_idx = 0
@@ -114,10 +103,8 @@ def analyze_audio_bytes(audio_bytes):
         if in_speech:
             speech_intervals.append((start_idx * frame_duration, len(chunk_rms) * frame_duration))
 
-        # 첫 발화 지연 (첫 음성 구간 시작 시점)
         first_latency = round(speech_intervals[0][0], 2) if speech_intervals else 0.5
 
-        # 타겟 단어별 Latency 매핑
         word_latencies = []
         prev_end = 0.0
 
@@ -129,7 +116,6 @@ def analyze_audio_bytes(audio_bytes):
                 start_sec = round(prev_end + 0.4, 2)
                 end_sec = round(start_sec + 0.3, 2)
 
-            # latency = 이전 단어 끝난 후 ~ 현재 단어 시작 전 무음 시간
             if idx == 0:
                 latency = first_latency
             else:
@@ -142,7 +128,6 @@ def analyze_audio_bytes(audio_bytes):
                 "latency": latency
             })
 
-        # 망설임 구간 비율 연산
         total_words = len(word_latencies)
         smooth_words = sum(1 for w in word_latencies if w["latency"] < 1.0)
         pause_ratio = round(100.0 - ((smooth_words / total_words) * 100.0), 1) if total_words > 0 else 0.0
@@ -156,7 +141,7 @@ def analyze_audio_bytes(audio_bytes):
             "max_word_latency": max_word_latency,
         }
     except Exception as e:
-        st.error(f"음성 데이터 파싱 중 오류 발생: {e}")
+        st.error(f"음성 데이터 분석 중 오류 발생: {e}")
         return None
 
 
@@ -166,26 +151,46 @@ def analyze_audio_bytes(audio_bytes):
 col1, col2 = st.columns([1, 1])
 
 # =========================================================
-# [LEFT COLUMN] 지문 제시 및 실제 음성 녹음
+# [LEFT COLUMN] 지문 제시 및 정돈된 마이크 녹음
 # =========================================================
 with col1:
     st.subheader("📖 1단계: 영어 지문 읽기 및 준비")
     st.text_area("오늘의 학습 지문", value=sample_text, height=100, disabled=True)
 
     st.markdown("---")
-    st.subheader("🎙️ 2단계: 실제 발음 음성 녹음 및 분석")
-    st.write("아이콘을 누르고 지문을 발음한 후 다시 눌러 정지하세요.")
+    st.subheader("🎙️ 2단계: 실제 발음 음성 녹음")
 
-    # 마이크 녹음 컴포넌트
-    recorded_audio = audio_recorder(
-        text="녹음 시작/정지 클릭",
-        recording_color="#e84c3d",
-        neutral_color="#6aa84f",
-        icon_name="microphone",
-        icon_size="2x",
-    )
+    # 깔끔한 녹음 카드 UI 박스 생성
+    with st.container():
+        st.markdown(
+            """
+            <div style="background-color: #f8f9fa; border: 1px solid #e9ecef; border-radius: 10px; padding: 15px; margin-bottom: 15px; text-align: center;">
+                <p style="margin: 0 0 10px 0; font-weight: bold; color: #495057;">👇 아래 마이크 아이콘을 누르면 녹음이 시작됩니다</p>
+            """,
+            unsafe_allow_html=True,
+        )
 
+        # 마이크 녹음 위젯
+        recorded_audio = audio_recorder(
+            text="",
+            recording_color="#e84c3d",
+            neutral_color="#4a5568",
+            icon_name="microphone",
+            icon_size="2x",
+        )
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # 녹음된 음성 데이터가 들어왔을 때 오디오 플레이어 및 분석 버튼 출력
     if recorded_audio:
+        st.markdown(
+            """
+            <div style="background-color: #f0fff4; border: 1px solid #c6f6d5; border-radius: 8px; padding: 10px; margin-bottom: 10px; text-align: center;">
+                <span style="color: #2f855a; font-weight: bold;">✅ 음성 녹음 완료! 들어보거나 분석을 실행하세요.</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         st.audio(recorded_audio, format="audio/wav")
 
         if st.button("⚡ 실제 음성 Latency 분석 실행", type="primary", use_container_width=True):
