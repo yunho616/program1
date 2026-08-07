@@ -26,7 +26,7 @@ if "final_rec_duration" not in st.session_state:
 if "analysis_data" not in st.session_state:
     st.session_state.analysis_data = None
 
-# "the fox is very fast." 문장이 추가된 학습 지문
+# "the fox is very fast." 문장이 포함된 학습 지문
 sample_text = (
     "The quick brown fox jumps over the lazy dog.\n"
     "The fox is very fast.\n"
@@ -34,9 +34,19 @@ sample_text = (
     "By analyzing speech latency, this tutor provides personalized scaffolding."
 )
 
-# 어원 DB
+# 어원 DB (실제 서비스 확장용 사전 데이터)
 etymology_db = {
+    "The": "고대 영어 þæt (지시대명사/정관사)",
+    "quick": "고대 영어 cwic (살아있는, 활발한)",
+    "brown": "고대 영어 brūn (어두운 색, 갈색)",
+    "fox": "고대 영어 fox (여우)",
     "jumps": "중세 영어 jumpen (갑자기 이동하다, 뛰어오르다)",
+    "over": "고대 영어 ofer (위쪽에, 건너서)",
+    "the": "고대 영어 þæt (지시대명사/정관사)",
+    "lazy": "저지 독일어 lasich (느슨한, 게으른)",
+    "dog.": "고대 영어 docga (개)",
+    "is": "고대 영어 is (있다, 이다)",
+    "very": "고대 프랑스어 verai (진실한, 매우)",
     "fast.": "고대 영어 fæst (단단한, 확고한, 빠른)",
     "practice": "중세 프랑스어 pratiquer (실행하다, 연습하다)",
     "feedback.": "합성어 feed(먹이다) + back(돌려주다) -> 반응/환류",
@@ -59,9 +69,13 @@ with col1:
     st.markdown("---")
     st.subheader("🎙️ 2단계: 녹음 제어 및 데이터 분석")
 
+    # ---------------------------------------------------------
+    # 실시간 녹음 타이머 위젯 (st.fragment 적용으로 0.1초 업데이트)
+    # ---------------------------------------------------------
     @st.fragment(run_every=0.1)
     def render_recording_section():
         if not st.session_state.is_recording:
+            # 녹음 완료 후 최종 타이머 표시 유지
             if st.session_state.final_rec_duration is not None:
                 st.markdown(
                     f"""
@@ -81,6 +95,7 @@ with col1:
                 st.session_state.final_rec_duration = None
                 st.rerun()
         else:
+            # 녹음 진행 중 상태
             current_dur = round(
                 time.time() - st.session_state.rec_start_time, 1
             )
@@ -104,45 +119,48 @@ with col1:
                     round(end_time - st.session_state.rec_start_time, 1), 1.0
                 )
 
-                # 단어별 타임스탬프 및 Latency 데이터 ("The fox is very fast." 구간 추가)
+                # 단어별 타임스탬프 및 Latency 데이터
                 word_latencies = [
-                    # 1행
-                    {"word": "The", "latency": 0.2},
-                    {"word": "quick", "latency": 0.4},
-                    {"word": "brown", "latency": 0.3},
-                    {"word": "fox", "latency": 0.5},
-                    {"word": "jumps", "latency": 2.3},  # 🚨 지연
-                    {"word": "over", "latency": 0.4},
-                    {"word": "the", "latency": 0.3},
-                    {"word": "lazy", "latency": 0.5},
-                    {"word": "dog.", "latency": 0.6},
-                    # 2행 (신규 추가 구간)
-                    {"word": "The", "latency": 0.3},
-                    {"word": "fox", "latency": 0.4},
-                    {"word": "is", "latency": 0.2},
-                    {"word": "very", "latency": 0.5},
-                    {"word": "fast.", "latency": 2.1},  # 🚨 지연
-                    # 3행
-                    {"word": "Learning", "latency": 0.8},
-                    {"word": "a", "latency": 0.2},
-                    {"word": "new", "latency": 0.3},
-                    {"word": "language", "latency": 1.2},  # ⚠️ 약간 망설임
-                    {"word": "requires", "latency": 0.7},
-                    {"word": "consistent", "latency": 0.9},
-                    {"word": "practice", "latency": 2.0},  # 🚨 지연
-                    {"word": "and", "latency": 0.3},
-                    {"word": "immediate", "latency": 0.8},
-                    {"word": "feedback.", "latency": 0.5},
+                    {"word": "The", "start": 0.2, "latency": 0.2},
+                    {"word": "quick", "start": 0.6, "latency": 0.4},
+                    {"word": "brown", "start": 1.1, "latency": 0.5},
+                    {"word": "fox", "start": 2.2, "latency": 1.1},   # 약간 망설임
+                    {"word": "jumps", "start": 4.4, "latency": 2.3}, # 지연 감지 (2.0초 이상)
+                    {"word": "over", "start": 5.1, "latency": 0.7},
+                    {"word": "the", "start": 5.6, "latency": 0.5},
+                    {"word": "lazy", "start": 6.2, "latency": 0.6},
+                    {"word": "dog.", "start": 6.9, "latency": 0.7},
+                    {"word": "The", "start": 7.3, "latency": 0.4},
+                    {"word": "fox", "start": 7.8, "latency": 0.5},
+                    {"word": "is", "start": 8.1, "latency": 0.3},
+                    {"word": "very", "start": 8.6, "latency": 0.5},
+                    {"word": "fast.", "start": 10.7, "latency": 2.1}, # 지연 감지 (2.0초 이상)
+                    {"word": "Learning", "start": 11.5, "latency": 0.8},
+                    {"word": "a", "start": 11.8, "latency": 0.3},
+                    {"word": "new", "start": 12.2, "latency": 0.4},
+                    {"word": "language", "start": 13.5, "latency": 1.3}, # 약간 망설임
+                    {"word": "requires", "start": 14.3, "latency": 0.8},
+                    {"word": "consistent", "start": 15.2, "latency": 0.9},
+                    {"word": "practice", "start": 17.2, "latency": 2.0},  # 지연 감지 (2.0초 이상)
+                    {"word": "and", "start": 17.6, "latency": 0.4},
+                    {"word": "immediate", "start": 18.4, "latency": 0.8},
+                    {"word": "feedback.", "start": 19.0, "latency": 0.6},
                 ]
 
+                # --- 망설임 구간 비율 연산 로직 ---
                 total_words = len(word_latencies)
                 smooth_words = sum(1 for w in word_latencies if w["latency"] < 1.0)
-                pause_ratio = round(100.0 - ((smooth_words / total_words) * 100.0), 1) if total_words > 0 else 0.0
+                
+                if total_words > 0:
+                    pause_ratio = round(100.0 - ((smooth_words / total_words) * 100.0), 1)
+                else:
+                    pause_ratio = 0.0
+
                 max_word_latency = max([w["latency"] for w in word_latencies])
 
                 st.session_state.final_rec_duration = rec_duration
                 st.session_state.analysis_data = {
-                    "latency": 0.2,
+                    "latency": 0.2,  # 첫 단어 발화 지연 시간
                     "duration": rec_duration,
                     "pause_ratio": pause_ratio,
                     "word_analysis": word_latencies,
@@ -151,6 +169,7 @@ with col1:
                 st.session_state.is_recording = False
                 st.rerun()
 
+    # 타이머 위젯 실행
     render_recording_section()
 
     st.markdown("---")
@@ -173,50 +192,53 @@ with col2:
 
         col_m1, col_m2, col_m3 = st.columns(3)
         with col_m1:
-            st.metric(label="⏱️ 첫 발화 지연", value=f"{data['latency']} 초")
+            st.metric(
+                label="⏱️ 첫 발화 지연 (Latency)", value=f"{data['latency']} 초"
+            )
         with col_m2:
             st.metric(label="🎙️ 음성 총 길이", value=f"{data['duration']} 초")
         with col_m3:
             st.metric(label="⏸️ 망설임 구간 비율", value=f"{data['pause_ratio']}%")
 
         # ---------------------------------------------------------
-        # 인라인 문장 하이라이트 뷰
+        # 단어별 Latency 분석 (기존 카드/Grid 형태)
         # ---------------------------------------------------------
         st.markdown("---")
-        st.subheader("📖 지문 기반 Latency 인라인 분석")
-        st.caption("🟢 원활(<1초) | 🟡 망설임(1~2초) | 🔴 지연 감지(≥2초)")
-
+        st.subheader("📖 분석 대상 지문 (단어별 Latency 분석)")
+        
         words_data = data.get("word_analysis", [])
+        
+        # 단어별 Latency 시각화 Grid (한 행에 3개씩 카드배치)
+        cols_per_row = 3
+        for i in range(0, len(words_data), cols_per_row):
+            row_words = words_data[i : i + cols_per_row]
+            row_cols = st.columns(cols_per_row)
+            for idx, item in enumerate(row_words):
+                with row_cols[idx]:
+                    if item["latency"] >= 2.0:
+                        bg_color = "#fff5f5"
+                        border_color = "#e53e3e"
+                        tag = "🚨 지연 감지"
+                    elif item["latency"] >= 1.0:
+                        bg_color = "#fffaf0"
+                        border_color = "#dd6b20"
+                        tag = "⚠️ 약간 망설임"
+                    else:
+                        bg_color = "#f0fff4"
+                        border_color = "#38a169"
+                        tag = "✅ 원활"
 
-        # HTML 문장 구성
-        inline_html = "<div style='line-height: 2.2; font-size: 16px; background-color: #f8f9fa; padding: 15px; border-radius: 10px; border: 1px solid #e2e8f0;'>"
-
-        for item in words_data:
-            lat = item["latency"]
-            word = item["word"]
-
-            # Latency별 하이라이트 색상 정의
-            if lat >= 2.0:
-                bg_color = "#fed7d7"  # 빨강
-                text_color = "#9b2c2c"
-                border = "1px solid #e53e3e"
-            elif lat >= 1.0:
-                bg_color = "#feebc8"  # 주황
-                text_color = "#9c4221"
-                border = "1px solid #dd6b20"
-            else:
-                bg_color = "#c6f6d5"  # 초록
-                text_color = "#22543d"
-                border = "1px solid #38a169"
-
-            inline_html += f"""
-            <span title="Latency: {lat}초" style="background-color: {bg_color}; color: {text_color}; border: {border}; padding: 3px 7px; margin: 2px 3px; border-radius: 5px; display: inline-block; font-weight: 500;">
-                {word} <small style="font-size: 10px; opacity: 0.8;">({lat}s)</small>
-            </span>
-            """
-
-        inline_html += "</div>"
-        st.markdown(inline_html, unsafe_allow_html=True)
+                    st.markdown(
+                        f"""
+                        <div style="background-color: {bg_color}; border: 1.5px solid {border_color}; border-radius: 8px; padding: 10px; text-align: center; margin-bottom: 8px;">
+                            <div style="font-size: 16px; font-weight: bold; color: #2d3748;">{item['word']}</div>
+                            <div style="font-size: 12px; color: #718096; margin-top: 4px;">시작 시점: <b>{item['start']}초</b></div>
+                            <div style="font-size: 13px; font-weight: bold; color: {border_color}; margin-top: 2px;">Latency: {item['latency']}초</div>
+                            <div style="font-size: 11px; margin-top: 4px; font-weight: 500;">{tag}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
 
         # ---------------------------------------------------------
         # 자동 비계 (Scaffolding) 도출
@@ -229,22 +251,28 @@ with col2:
         )
 
         if is_scaffold_needed:
-            # 2.0초 이상 지연된 단어만 추출
+            # Latency가 2.0초 이상인 '지연 감지' 단어만 필터링
             delayed_words = [w for w in words_data if w["latency"] >= 2.0]
 
             if delayed_words:
                 delayed_word_names = ", ".join([f"'{w['word']}'" for w in delayed_words])
                 st.error(
-                    f"🚨 **지연 발생 단어({delayed_word_names})** 감지! 자동 역번역 및 어원 비계가 활성화되었습니다."
+                    f"🚨 **지연 발생 단어({delayed_word_names} - 2.0초 이상)** 감지! 자동 역번역 및 어원 비계가 활성화되었습니다."
+                )
+            else:
+                st.warning(
+                    "⚠️ **망설임 구간 비율(25% 초과)** 감지! 전체적인 문장 구성 비계가 활성화되었습니다."
                 )
 
             st.markdown("### 1. 직독직해 역번역 힌트")
             st.info(
-                "**[지연 구간 힌트]** 빠른 갈색 여우가 ➔ **[지연] 뛰어넘는다 (jumps)** ➔ 게으른 개를. "
-                "그 여우는 매우 **[지연] 빠릅니다 (fast)**."
+                "**[어순 배치 힌트]** 빠른 갈색 여우가 ➔ **[지연 구간] 뛰어넘는다 (jumps)** ➔ 게으른 개를. "
+                "그 여우는 매우 **[지연 구간] 빠릅니다 (fast)**."
             )
 
             st.markdown("### 2. 지연 단어 어원 심층 분석")
+            
+            # 지연 감지 단어들만 어원 정보 매핑하여 JSON 출력
             if delayed_words:
                 etymology_result = {}
                 for item in delayed_words:
@@ -252,14 +280,22 @@ with col2:
                     info = etymology_db.get(word_clean, "어원 정보 등록 중")
                     key_name = f"{word_clean} (Latency: {item['latency']}초)"
                     etymology_result[key_name] = info
-
+                
                 st.json(etymology_result)
+            else:
+                st.write("감지된 개별 지연 단어가 없습니다.")
         else:
             st.success(
                 "🎉 모든 단어의 발화 반응속도가 원활합니다! 힌트 없이 완벽하게 수행했습니다."
             )
+            st.json({
+                "표현 확장 팁": (
+                    "'jumps over' 대신 'clears' 또는 'leaps over' 표현을"
+                    " 사용할 수 있습니다."
+                )
+            })
     else:
         st.info(
             "👈 좌측에서 **[🔴 녹음 시작]** 후 **[⏹️ 녹음 정지 및 분석 실행]**을"
-            " 누르시면 분석 데이터가 표시됩니다."
+            " 누르시면 즉시 단어별 Latency 분석 데이터와 비계 힌트가 출력됩니다."
         )
