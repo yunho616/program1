@@ -1,6 +1,7 @@
 streamlit
-streamlit-mic-recorder
-praat-parselmouth
-pandas
+audio-recorder-streamlit
+openai
 pydub
+librosa
 numpy
+pandas
