@@ -28,6 +28,19 @@ if "analysis_data" not in st.session_state:
 
 sample_text = "The quick brown fox jumps over the lazy dog."
 
+# 어원 DB (실제 서비스 확장용 사전 데이터)
+etymology_db = {
+    "The": "고대 영어 þæt (지시대명사/정관사)",
+    "quick": "고대 영어 cwic (살아있는, 활발한)",
+    "brown": "고대 영어 brūn (어두운 색, 갈색)",
+    "fox": "고대 영어 fox (여우)",
+    "jumps": "중세 영어 jumpen (갑자기 이동하다, 뛰어오르다)",
+    "over": "고대 영어 ofer (위쪽에, 건너서)",
+    "the": "고대 영어 þæt (지시대명사/정관사)",
+    "lazy": "저지 독일어 lasich (느슨한, 게으른)",
+    "dog.": "고대 영어 docga (개)",
+}
+
 # ---------------------------------------------------------
 # 화면 레이아웃 (좌: 지문 및 녹음 제어 / 우: 음성 분석 결과)
 # ---------------------------------------------------------
@@ -99,8 +112,8 @@ with col1:
                     {"word": "The", "start": 0.2, "latency": 0.2},
                     {"word": "quick", "start": 0.6, "latency": 0.4},
                     {"word": "brown", "start": 1.1, "latency": 0.5},
-                    {"word": "fox", "start": 2.2, "latency": 1.1},   # 약간 망설임 (1초 이상~2초 미만)
-                    {"word": "jumps", "start": 4.4, "latency": 2.2}, # 지연 감지 (2초 이상)
+                    {"word": "fox", "start": 2.2, "latency": 1.1},   # 약간 망설임 (1.0~2.0초 미만)
+                    {"word": "jumps", "start": 4.4, "latency": 2.2}, # 지연 감지 (2.0초 이상)
                     {"word": "over", "start": 5.1, "latency": 0.7},
                     {"word": "the", "start": 5.6, "latency": 0.5},
                     {"word": "lazy", "start": 6.2, "latency": 0.6},
@@ -109,10 +122,8 @@ with col1:
 
                 # --- 망설임 구간 비율 연산 로직 ---
                 total_words = len(word_latencies)
-                # 원활한 단어 수 (Latency < 1.0초)
                 smooth_words = sum(1 for w in word_latencies if w["latency"] < 1.0)
                 
-                # 망설임 구간 비율 = 100 - (원활한 단어 수 / 전체 단어 수 * 100)
                 if total_words > 0:
                     pause_ratio = round(100.0 - ((smooth_words / total_words) * 100.0), 1)
                 else:
@@ -177,7 +188,6 @@ with col2:
             row_cols = st.columns(cols_per_row)
             for idx, item in enumerate(row_words):
                 with row_cols[idx]:
-                    # Latency 분류 기준 적용
                     if item["latency"] >= 2.0:
                         bg_color = "#fff5f5"
                         border_color = "#e53e3e"
@@ -211,19 +221,38 @@ with col2:
         )
 
         if is_scaffold_needed:
-            st.error(
-                "🚨 **특정 단어(jumps) 발화지연(2.0초 이상)** 감지! 자동 역번역 및 어원 비계가 활성화되었습니다."
-            )
+            # 💡 [핵심 추가 부분] Latency가 2.0초 이상인 '지연 감지' 단어만 필터링
+            delayed_words = [w for w in words_data if w["latency"] >= 2.0]
+
+            if delayed_words:
+                delayed_word_names = ", ".join([f"'{w['word']}'" for w in delayed_words])
+                st.error(
+                    f"🚨 **지연 발생 단어({delayed_word_names} - 2.0초 이상)** 감지! 자동 역번역 및 어원 비계가 활성화되었습니다."
+                )
+            else:
+                st.warning(
+                    "⚠️ **망설임 구간 비율(25% 초과)** 감지! 전체적인 문장 구성 비계가 활성화되었습니다."
+                )
+
             st.markdown("### 1. 직독직해 역번역 힌트")
             st.info(
                 "**[어순 배치 힌트]** 빠른 갈색 여우가 ➔ **[지연 구간] 뛰어넘는다 (jumps)** ➔ 게으른 개를"
             )
+
             st.markdown("### 2. 지연 단어 어원 심층 분석")
-            st.json({
-                "jumps [지연 발생]": "중세 영어 jumpen (갑자기 이동하다, 뛰어오르다)",
-                "quick": "고대 영어 cwic (살아있는, 활발한)",
-                "lazy": "저지 독일어 lasich (느슨한, 게으른)",
-            })
+            
+            # 지연 감지 단어들만 어원 정보 매핑
+            if delayed_words:
+                etymology_result = {}
+                for item in delayed_words:
+                    word_clean = item["word"]
+                    info = etymology_db.get(word_clean, "어원 정보 등록 중")
+                    key_name = f"{word_clean} (Latency: {item['latency']}초)"
+                    etymology_result[key_name] = info
+                
+                st.json(etymology_result)
+            else:
+                st.write("감지된 개별 지연 단어가 없습니다.")
         else:
             st.success(
                 "🎉 모든 단어의 발화 반응속도가 원활합니다! 힌트 없이 완벽하게 수행했습니다."
