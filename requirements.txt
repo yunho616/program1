@@ -1,6 +1,6 @@
-streamlit>=1.30.0
-audio-recorder-streamlit>=0.0.8
-openai>=1.0.0
+streamlit
+audio-recorder-streamlit
+openai
 pydub
 librosa
 numpy
