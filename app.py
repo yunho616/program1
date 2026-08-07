@@ -3,7 +3,6 @@ import time
 import wave
 import audioop
 import streamlit as st
-import streamlit.components.v1 as components
 
 # 1. 페이지 기본 설정
 st.set_page_config(
@@ -158,7 +157,7 @@ def analyze_audio_bytes(audio_bytes):
 col1, col2 = st.columns([1, 1])
 
 # =========================================================
-# [LEFT COLUMN] 지문 제시 및 원래 디자인의 녹음 제어
+# [LEFT COLUMN] 지문 제시 및 녹음 제어
 # =========================================================
 with col1:
     st.subheader("📖 1단계: 영어 지문 읽기 및 준비")
@@ -168,12 +167,11 @@ with col1:
     st.subheader("🎙️ 2단계: 녹음 제어 및 데이터 분석")
 
     # ---------------------------------------------------------
-    # 원래 타이머 디자인 및 버튼 UI
+    # 녹음 타이머 및 버튼 UI
     # ---------------------------------------------------------
     @st.fragment(run_every=0.1)
     def render_recording_section():
         if not st.session_state.is_recording:
-            # 녹음 완료 후 타이머 표시
             if st.session_state.final_rec_duration is not None:
                 st.markdown(
                     f"""
@@ -191,7 +189,6 @@ with col1:
                 st.session_state.final_rec_duration = None
                 st.rerun()
         else:
-            # 녹음 진행 중 원래 디자인 타이머
             current_dur = round(time.time() - st.session_state.rec_start_time, 1)
 
             st.markdown(
@@ -208,14 +205,12 @@ with col1:
                 end_time = time.time()
                 rec_duration = max(round(end_time - st.session_state.rec_start_time, 1), 1.0)
 
-                # 분석 데이터 생성 (실제 녹음 바이트 데이터가 있으면 분석, 없으면 측정시간 기반 추정)
                 if st.session_state.recorded_audio_bytes:
                     res = analyze_audio_bytes(st.session_state.recorded_audio_bytes)
                 else:
                     res = None
 
                 if not res:
-                    # 백업용 녹음 시간 기반 분석 데이터
                     word_latencies = [
                         {"word": "The", "start": 0.2, "latency": 0.2},
                         {"word": "quick", "start": 0.6, "latency": 0.4},
@@ -248,7 +243,6 @@ with col1:
                 st.session_state.is_recording = False
                 st.rerun()
 
-    # 원래 디자인의 타이머 구역 실행
     render_recording_section()
 
     st.markdown("---")
@@ -281,7 +275,7 @@ with col2:
             st.metric(label="⏸️ 망설임 구간 비율", value=f"{data['pause_ratio']}%")
 
         # ---------------------------------------------------------
-        # 단어별 Latency Grid 분석 (원래 디자인)
+        # 단어별 Latency Grid 분석
         # ---------------------------------------------------------
         st.markdown("---")
         st.subheader("📖 분석 대상 지문 (단어별 Latency 분석)")
@@ -320,7 +314,7 @@ with col2:
                     )
 
         # ---------------------------------------------------------
-        # 자동 비계 (Scaffolding) 도출
+        # 자동 비계 (Scaffolding) 도출 - 역번역 힌트 문구 수정
         # ---------------------------------------------------------
         st.markdown("---")
         st.subheader("💡 자동 생성된 역번역/어원 비계 (Scaffolding)")
@@ -344,8 +338,8 @@ with col2:
 
             st.markdown("### 1. 직독직해 역번역 힌트")
             st.info(
-                "**[어순 배치 힌트]** 빠른 갈색 여우가 ➔ **[지연 구간] 뛰어넘는다 (jumps)** ➔ 게으른 개를. "
-                "그 여우는 매우 **[지연 구간] 빠릅니다 (fast)**."
+                "**[어순 배치 힌트]** 빠른 갈색 여우가 ➔ 뛰어넘는다 (jumps) ➔ 게으른 개를. "
+                "그 여우는 매우 ➔ 빠릅니다 (fast)."
             )
 
             st.markdown("### 2. 지연 단어 어원 심층 분석")
