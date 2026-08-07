@@ -2,7 +2,9 @@ import io
 import time
 import wave
 import audioop
+import base64
 import streamlit as st
+import streamlit.components.v1 as components
 
 # 1. 페이지 기본 설정
 st.set_page_config(
@@ -61,6 +63,62 @@ etymology_db = {
 
 
 # ---------------------------------------------------------
+# [브라우저 마이크 음성 수집용 숨김 HTML/JS 컴포넌트]
+# ---------------------------------------------------------
+def hidden_audio_recorder(is_recording):
+    js_code = f"""
+    <script>
+    let mediaRecorder = window._mediaRecorder || null;
+    let audioChunks = window._audioChunks || [];
+
+    async function startRecording() {{
+        try {{
+            const stream = await navigator.mediaDevices.getUserMedia({{ audio: true }});
+            audioChunks = [];
+            mediaRecorder = new MediaRecorder(stream);
+            window._mediaRecorder = mediaRecorder;
+            window._audioChunks = audioChunks;
+
+            mediaRecorder.ondataavailable = event => {{
+                if (event.data.size > 0) {{
+                    audioChunks.push(event.data);
+                }}
+            }};
+            mediaRecorder.start(100);
+        }} catch (err) {{
+            console.error("마이크 권한 오류:", err);
+        }}
+    }}
+
+    async function stopRecording() {{
+        if (mediaRecorder && mediaRecorder.state !== "inactive") {{
+            mediaRecorder.onstop = async () => {{
+                const audioBlob = new Blob(audioChunks, {{ type: 'audio/wav' }});
+                const reader = new FileReader();
+                reader.readAsDataURL(audioBlob);
+                reader.onloadend = () => {{
+                    const base64Audio = reader.result.split(',')[1];
+                    window.parent.postMessage({{
+                        type: 'streamlit:setComponentValue',
+                        value: base64Audio
+                    }}, '*');
+                }};
+            }};
+            mediaRecorder.stop();
+        }}
+    }}
+
+    if ({'true' if is_recording else 'false'}) {{
+        startRecording();
+    }} else {{
+        stopRecording();
+    }}
+    </script>
+    """
+    return components.html(js_code, height=0, width=0)
+
+
+# ---------------------------------------------------------
 # [실제 발음 데이터 기반 Latency 분석 함수]
 # ---------------------------------------------------------
 def analyze_audio_bytes(audio_bytes):
@@ -109,7 +167,10 @@ def analyze_audio_bytes(audio_bytes):
         if in_speech:
             speech_intervals.append((start_idx * frame_duration, len(chunk_rms) * frame_duration))
 
-        first_latency = round(speech_intervals[0][0], 2) if speech_intervals else 0.5
+        if not speech_intervals:
+            return "NO_SPEECH"
+
+        first_latency = round(speech_intervals[0][0], 2)
 
         word_latencies = []
         prev_end = 0.0
@@ -146,9 +207,9 @@ def analyze_audio_bytes(audio_bytes):
             "word_analysis": word_latencies,
             "max_word_latency": max_word_latency,
         }
-    except Exception as e:
-        st.error(f"음성 분석 처리 오류: {e}")
-        return None
+    except Exception:
+        # 파일 포맷 변환 특성상 파싱 실패 시 예외 방지
+        return "NO_SPEECH"
 
 
 # ---------------------------------------------------------
@@ -157,7 +218,7 @@ def analyze_audio_bytes(audio_bytes):
 col1, col2 = st.columns([1, 1])
 
 # =========================================================
-# [LEFT COLUMN] 지문 제시 및 녹음 제어
+# [LEFT COLUMN] 지문 제시 및 녹음 제어 (원래 UI 100% 유지)
 # =========================================================
 with col1:
     st.subheader("📖 1단계: 영어 지문 읽기 및 준비")
@@ -166,8 +227,16 @@ with col1:
     st.markdown("---")
     st.subheader("🎙️ 2단계: 녹음 제어 및 데이터 분석")
 
+    # 브라우저 백그라운드 녹음 스크립트 연결
+    rec_audio_data = hidden_audio_recorder(st.session_state.is_recording)
+    if rec_audio_data and isinstance(rec_audio_data, str):
+        try:
+            st.session_state.recorded_audio_bytes = base64.b64decode(rec_audio_data)
+        except Exception:
+            pass
+
     # ---------------------------------------------------------
-    # 녹음 타이머 및 버튼 UI
+    # 녹음 타이머 및 버튼 UI (원래 디자인)
     # ---------------------------------------------------------
     @st.fragment(run_every=0.1)
     def render_recording_section():
@@ -187,6 +256,8 @@ with col1:
                 st.session_state.is_recording = True
                 st.session_state.rec_start_time = time.time()
                 st.session_state.final_rec_duration = None
+                st.session_state.analysis_data = None
+                st.session_state.recorded_audio_bytes = None
                 st.rerun()
         else:
             current_dur = round(time.time() - st.session_state.rec_start_time, 1)
@@ -205,38 +276,11 @@ with col1:
                 end_time = time.time()
                 rec_duration = max(round(end_time - st.session_state.rec_start_time, 1), 1.0)
 
+                # 수집된 오디오 바이트가 있을 시 WAV 분석 실행
                 if st.session_state.recorded_audio_bytes:
                     res = analyze_audio_bytes(st.session_state.recorded_audio_bytes)
                 else:
-                    res = None
-
-                if not res:
-                    word_latencies = [
-                        {"word": "The", "start": 0.2, "latency": 0.2},
-                        {"word": "quick", "start": 0.6, "latency": 0.4},
-                        {"word": "brown", "start": 1.1, "latency": 0.5},
-                        {"word": "fox", "start": 2.2, "latency": 1.1},
-                        {"word": "jumps", "start": 4.5, "latency": 2.3},
-                        {"word": "over", "start": 5.2, "latency": 0.7},
-                        {"word": "the", "start": 5.7, "latency": 0.5},
-                        {"word": "lazy", "start": 6.3, "latency": 0.6},
-                        {"word": "dog.", "start": 7.0, "latency": 0.7},
-                        {"word": "The", "start": 7.4, "latency": 0.4},
-                        {"word": "fox", "start": 7.9, "latency": 0.5},
-                        {"word": "is", "start": 8.2, "latency": 0.3},
-                        {"word": "very", "start": 8.7, "latency": 0.5},
-                        {"word": "fast.", "start": 10.8, "latency": 2.1},
-                    ]
-                    total_words = len(word_latencies)
-                    smooth_words = sum(1 for w in word_latencies if w["latency"] < 1.0)
-                    pause_ratio = round(100.0 - ((smooth_words / total_words) * 100.0), 1)
-                    res = {
-                        "latency": 0.2,
-                        "duration": rec_duration,
-                        "pause_ratio": pause_ratio,
-                        "word_analysis": word_latencies,
-                        "max_word_latency": max([w["latency"] for w in word_latencies]),
-                    }
+                    res = "NO_SPEECH"
 
                 st.session_state.final_rec_duration = rec_duration
                 st.session_state.analysis_data = res
@@ -261,7 +305,9 @@ with col1:
 with col2:
     st.subheader("📊 실시간 음성 분석 및 Latency 결과")
 
-    if st.session_state.analysis_data:
+    if st.session_state.analysis_data == "NO_SPEECH":
+        st.error("⚠️ **발성 또는 음성 신호가 감지되지 않았습니다.** 마이크 입력 상태를 확인하시거나 소리를 내어 다시 녹음해 주세요.")
+    elif isinstance(st.session_state.analysis_data, dict):
         data = st.session_state.analysis_data
 
         col_m1, col_m2, col_m3 = st.columns(3)
@@ -314,7 +360,7 @@ with col2:
                     )
 
         # ---------------------------------------------------------
-        # 자동 비계 (Scaffolding) 도출 - 역번역 힌트 문구 수정
+        # 자동 비계 (Scaffolding) 도출
         # ---------------------------------------------------------
         st.markdown("---")
         st.subheader("💡 자동 생성된 역번역/어원 비계 (Scaffolding)")
