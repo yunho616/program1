@@ -78,7 +78,7 @@ etymology_db = {
 
 
 # ---------------------------------------------------------
-# [브라우저 마이크 음성 수집용 숨김 HTML/JS 컴포넌트]
+# [브라우저 마이크 음성 수집용 숨김 HTML/JS 컴포넌트] - Auto Gain 적용
 # ---------------------------------------------------------
 def hidden_audio_recorder(is_recording):
     js_code = f"""
@@ -88,7 +88,14 @@ def hidden_audio_recorder(is_recording):
 
     async function startRecording() {{
         try {{
-            const stream = await navigator.mediaDevices.getUserMedia({{ audio: true }});
+            // 작은 음성 신호를 위해 autoGainControl, noiseSuppression 옵션 추가
+            const stream = await navigator.mediaDevices.getUserMedia({{ 
+                audio: {{
+                    autoGainControl: true,
+                    noiseSuppression: true,
+                    echoCancellation: true
+                }} 
+            }});
             audioChunks = [];
             mediaRecorder = new MediaRecorder(stream);
             window._mediaRecorder = mediaRecorder;
@@ -134,7 +141,7 @@ def hidden_audio_recorder(is_recording):
 
 
 # ---------------------------------------------------------
-# [실제 발음 데이터 기반 Latency 분석 함수]
+# [실제 발음 데이터 기반 Latency 분석 함수] - 고감도(High Sensitivity) 적용
 # ---------------------------------------------------------
 def analyze_audio_bytes(audio_bytes):
     try:
@@ -165,7 +172,9 @@ def analyze_audio_bytes(audio_bytes):
             return None
 
         max_rms = max(chunk_rms) if max(chunk_rms) > 0 else 1
-        threshold = max(max_rms * 0.15, 300)
+
+        # 🎯 [핵심 변경] 작은 소리도 인식하도록 임계값(Threshold)을 대폭 낮춤
+        threshold = max(max_rms * 0.08, 50)
 
         speech_intervals = []
         in_speech = False
@@ -235,7 +244,6 @@ def analyze_audio_bytes(audio_bytes):
             "max_word_latency": max_word_latency,
         }
     except Exception:
-        # 파일 포맷 변환 특성상 파싱 실패 시 예외 방지
         return "NO_SPEECH"
 
 
@@ -256,7 +264,6 @@ with col1:
     st.markdown("---")
     st.subheader("🎙️ 2단계: 녹음 제어 및 데이터 분석")
 
-    # 브라우저 백그라운드 녹음 스크립트 연결
     rec_audio_data = hidden_audio_recorder(st.session_state.is_recording)
     if rec_audio_data and isinstance(rec_audio_data, str):
         try:
@@ -266,9 +273,6 @@ with col1:
         except Exception:
             pass
 
-    # ---------------------------------------------------------
-    # 녹음 타이머 및 버튼 UI
-    # ---------------------------------------------------------
     @st.fragment(run_every=0.1)
     def render_recording_section():
         if not st.session_state.is_recording:
@@ -313,7 +317,6 @@ with col1:
                     round(end_time - st.session_state.rec_start_time, 1), 1.0
                 )
 
-                # 수집된 오디오 바이트가 있을 시 WAV 분석 실행
                 if st.session_state.recorded_audio_bytes:
                     res = analyze_audio_bytes(
                         st.session_state.recorded_audio_bytes
@@ -344,7 +347,6 @@ with col1:
 with col2:
     st.subheader("📊 실시간 음성 분석 및 Latency 결과")
 
-    # 🔊 녹음된 음성 다시 듣기 오디오 플레이어
     if st.session_state.recorded_audio_bytes is not None:
         st.markdown("##### 🔊 녹음된 음성 재생")
         st.audio(st.session_state.recorded_audio_bytes, format="audio/wav")
@@ -371,9 +373,6 @@ with col2:
                 label="⏸️ 망설임 구간 비율", value=f"{data['pause_ratio']}%"
             )
 
-        # ---------------------------------------------------------
-        # 단어별 Latency Grid 분석
-        # ---------------------------------------------------------
         st.markdown("---")
         st.subheader("📖 분석 대상 지문 (단어별 Latency 분석)")
 
@@ -410,9 +409,6 @@ with col2:
                         unsafe_allow_html=True,
                     )
 
-        # ---------------------------------------------------------
-        # 자동 비계 (Scaffolding) 도출
-        # ---------------------------------------------------------
         st.markdown("---")
         st.subheader("💡 자동 생성된 역번역/어원 비계 (Scaffolding)")
 
