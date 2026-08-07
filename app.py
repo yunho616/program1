@@ -97,12 +97,11 @@ def hidden_audio_recorder(is_recording):
             }});
             audioChunks = [];
             
-            // 브라우저 호환성에 따라 audio/webm;codecs=opus 지원 여부 확인
             let options = {{ mimeType: 'audio/webm;codecs=opus' }};
             if (!MediaRecorder.isTypeSupported(options.mimeType)) {{
                 options = {{ mimeType: 'audio/webm' }};
                 if (!MediaRecorder.isTypeSupported(options.mimeType)) {{
-                    options = {{}}; // 브라우저 기본값 사용
+                    options = {{}};
                 }}
             }}
 
@@ -116,7 +115,7 @@ def hidden_audio_recorder(is_recording):
                 }}
             }};
             mediaRecorder.start(100);
-        } catch (err) {{
+        }} catch (err) {{
             console.error("마이크 권한 오류:", err);
         }}
     }}
@@ -126,7 +125,6 @@ def hidden_audio_recorder(is_recording):
             mediaRecorder.onstop = async () => {{
                 const mimeType = mediaRecorder.mimeType || 'audio/webm';
                 const audioBlob = new Blob(audioChunks, {{ type: mimeType }});
-                
                 const reader = new FileReader();
                 reader.readAsDataURL(audioBlob);
                 reader.onloadend = () => {{
@@ -152,11 +150,10 @@ def hidden_audio_recorder(is_recording):
 
 
 # ---------------------------------------------------------
-# [실제 발음 데이터 기반 Latency 분석 함수]
+# [실제 발음 데이터 기반 Latency 분석 함수] - 고감도(High Sensitivity) 적용
 # ---------------------------------------------------------
 def analyze_audio_bytes(audio_bytes):
     try:
-        # webm 컨테이너 형식일 수 있으므로 pydub를 우선 활용하여 wav PCM으로 안전하게 변환 후 분석
         try:
             from pydub import AudioSegment
             audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes))
@@ -166,7 +163,6 @@ def analyze_audio_bytes(audio_bytes):
             wav_io.seek(0)
             wav_file = wave.open(wav_io, "rb")
         except Exception:
-            # 기본 wave 파일 직접 읽기 시도
             wav_file = wave.open(io.BytesIO(audio_bytes), "rb")
 
         nchannels = wav_file.getnchannels()
@@ -196,6 +192,8 @@ def analyze_audio_bytes(audio_bytes):
             return None
 
         max_rms = max(chunk_rms) if max(chunk_rms) > 0 else 1
+
+        # 🎯 [핵심 변경] 작은 소리도 인식하도록 임계값(Threshold)을 대폭 낮춤
         threshold = max(max_rms * 0.08, 50)
 
         speech_intervals = []
