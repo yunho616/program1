@@ -2,16 +2,10 @@ import io
 import math
 import struct
 import wave
+import numpy as np
+import soundfile as sf
 import streamlit as st
-
-# pydub 오디오 파일 자동 변환용 import
-try:
-    from pydub import AudioSegment
-    HAS_PYDUB = True
-except ImportError:
-    HAS_PYDUB = False
-
-from streamlit_mic_recorder import mic_recorder
+from audio_recorder_streamlit import audio_recorder
 
 
 # ---------------------------------------------------------
@@ -108,51 +102,39 @@ etymology_db = {
 
 
 # ---------------------------------------------------------
-# [포맷 변환 지원 고감도 파형 분석 함수]
+# [soundfile 기반 범용 음성 파형 분석 함수]
 # ---------------------------------------------------------
 def analyze_audio_bytes(raw_audio_bytes):
     try:
-        # 1. 브라우저 녹음 바이너리를 표준 WAV 데이터로 자동 변환 시도
-        wav_bytes = raw_audio_bytes
-        if HAS_PYDUB:
-            try:
-                audio_seg = AudioSegment.from_file(
-                    io.BytesIO(raw_audio_bytes)
-                )
-                wav_io = io.BytesIO()
-                audio_seg.export(wav_io, format="wav")
-                wav_bytes = wav_io.getvalue()
-            except Exception:
-                pass
+        # 브라우저에서 어떤 음성 포맷(WebM/Ogg/WAV)이 넘어와도 numpy 배열로 복원
+        audio_data, sample_rate = sf.read(io.BytesIO(raw_audio_bytes))
 
-        wav_file = wave.open(io.BytesIO(wav_bytes), "rb")
-        nchannels = wav_file.getnchannels()
-        sampwidth = wav_file.getsampwidth()
-        framerate = wav_file.getframerate()
-        nframes = wav_file.getnframes()
+        # 다채널(Stereo) 음성일 경우 단일 채널(Mono)로 평탄화
+        if len(audio_data.shape) > 1:
+            audio_data = np.mean(audio_data, axis=1)
 
-        total_duration = round(nframes / float(framerate), 1)
+        total_duration = round(len(audio_data) / float(sample_rate), 1)
 
+        # 0.05초(50ms) 단위 프레임 크기 계산
         frame_duration = 0.05
-        frame_size = int(framerate * frame_duration)
+        frame_size = int(sample_rate * frame_duration)
 
         chunk_rms = []
-        for _ in range(0, nframes, frame_size):
-            frames = wav_file.readframes(frame_size)
-            if len(frames) < frame_size * sampwidth * nchannels:
+        for i in range(0, len(audio_data), frame_size):
+            chunk = audio_data[i : i + frame_size]
+            if len(chunk) == 0:
                 break
-            rms = audioop.rms(frames, sampwidth)
+            # RMS 계산 (상대 볼륨 값)
+            rms = np.sqrt(np.mean(chunk**2))
             chunk_rms.append(rms)
-
-        wav_file.close()
 
         if not chunk_rms:
             return "NO_SPEECH"
 
-        max_rms = max(chunk_rms) if max(chunk_rms) > 0 else 1
+        max_rms = max(chunk_rms) if max(chunk_rms) > 0 else 0.001
 
-        # 감도 대폭 상향: 최대 음량의 2% 수준 및 최소 1 이상이면 음성으로 간주
-        threshold = max(max_rms * 0.02, 1)
+        # 아주 미세한 소리도 포착할 수 있도록 최대 음량의 1% 선을 임계값으로 설정
+        threshold = max(max_rms * 0.01, 0.0001)
 
         speech_intervals = []
         in_speech = False
@@ -173,7 +155,6 @@ def analyze_audio_bytes(raw_audio_bytes):
                 (start_idx * frame_duration, len(chunk_rms) * frame_duration)
             )
 
-        # 음성 구간을 포착하지 못하더라도 예외 방지를 위한 최소 기본값 할당
         if not speech_intervals:
             speech_intervals = [(0.1, max(total_duration, 0.5))]
 
@@ -241,28 +222,33 @@ with col1:
     st.markdown("---")
     st.subheader("🎙️ 2단계: 음성 녹음")
 
-    st.write("아래 녹음 버튼을 눌러 지문을 읽은 후 정지 버튼을 누르세요.")
-
-    audio_record = mic_recorder(
-        start_prompt="🔴 녹음 시작",
-        stop_prompt="⏹️ 녹음 정지 및 분석",
-        key="recorder",
+    st.write(
+        "아래 마이크 아이콘 버튼을 클릭하여 녹음을 시작하고, 다시 클릭하여"
+        " 녹음을 종료하세요."
     )
 
-    if audio_record and "bytes" in audio_record:
-        st.session_state.recorded_audio_bytes = audio_record["bytes"]
-        st.session_state.analysis_data = analyze_audio_bytes(
-            audio_record["bytes"]
-        )
+    # 단순화된 실시간 마이크 위젯
+    audio_bytes = audio_recorder(
+        text="마이크 버튼 클릭 (녹음 시작/종료)",
+        recording_color="#e84c3d",
+        neutral_color="#6c757d",
+        icon_name="microphone",
+        icon_size="2x",
+    )
 
-    with st.expander("📁 음성 파일 직접 업로드 (대체 방법)"):
+    if audio_bytes:
+        st.session_state.recorded_audio_bytes = audio_bytes
+        st.session_state.analysis_data = analyze_audio_bytes(audio_bytes)
+
+    with st.expander("📁 음성 파일 직접 업로드 (대체 테스트)"):
         uploaded_file = st.file_uploader(
-            "WAV/MP3/M4A 음성 파일 올려서 테스트", type=["wav", "mp3", "m4a"]
+            "WAV, MP3, M4A, OGG 파일 지원",
+            type=["wav", "mp3", "m4a", "ogg"],
         )
         if uploaded_file is not None:
-            audio_bytes = uploaded_file.read()
-            st.session_state.recorded_audio_bytes = audio_bytes
-            st.session_state.analysis_data = analyze_audio_bytes(audio_bytes)
+            file_bytes = uploaded_file.read()
+            st.session_state.recorded_audio_bytes = file_bytes
+            st.session_state.analysis_data = analyze_audio_bytes(file_bytes)
             st.success("파일 분석이 완료되었습니다!")
 
     st.markdown("---")
@@ -282,10 +268,7 @@ with col2:
 
     if st.session_state.analysis_data == "NO_SPEECH":
         st.error(
-            "⚠️ **음성 데이터 인식 실패:**\n\n"
-            "1. 마이크 입력 볼륨이 너무 작은지 확인해 주세요.\n"
-            "2. Windows/Mac **시스템 설정 ➔ 소리 ➔ 입력 마이크 볼륨**을 높여주세요.\n"
-            "3. 아래 '음성 파일 직접 업로드'로 테스트용 WAV/MP3 파일을 등록해보세요."
+            "⚠️ **음성 수집 실패:** 입력된 음성 파일 형식 해석에 실패했거나 무음 상태입니다. 마이크 아이콘을 눌러 1초 이상 발화 후 다시 종료해 보세요."
         )
     elif isinstance(st.session_state.analysis_data, dict):
         data = st.session_state.analysis_data
@@ -392,5 +375,5 @@ with col2:
             )
     else:
         st.info(
-            "👈 좌측에서 **[🔴 녹음 시작]**을 누르고 지문을 읽은 뒤 **[⏹️ 녹음 정지 및 분석]**을 누르세요."
+            "👈 좌측의 **[마이크 버튼]**을 눌러 녹음을 진행해보세요."
         )
