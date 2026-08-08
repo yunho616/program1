@@ -2,3 +2,4 @@ streamlit
 streamlit-mic-recorder
 soundfile
 numpy
+pydub
