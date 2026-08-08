@@ -5,7 +5,7 @@ import wave
 import numpy as np
 import soundfile as sf
 import streamlit as st
-from audio_recorder_streamlit import audio_recorder
+from streamlit_mic_recorder import mic_recorder
 
 
 # ---------------------------------------------------------
@@ -102,20 +102,18 @@ etymology_db = {
 
 
 # ---------------------------------------------------------
-# [soundfile 기반 범용 음성 파형 분석 함수]
+# [soundfile 기반 안전 음성 파형 분석 함수]
 # ---------------------------------------------------------
 def analyze_audio_bytes(raw_audio_bytes):
     try:
-        # 브라우저에서 어떤 음성 포맷(WebM/Ogg/WAV)이 넘어와도 numpy 배열로 복원
+        # 브라우저에서 수집된 녹음 파일 데이터 디코딩
         audio_data, sample_rate = sf.read(io.BytesIO(raw_audio_bytes))
 
-        # 다채널(Stereo) 음성일 경우 단일 채널(Mono)로 평탄화
         if len(audio_data.shape) > 1:
             audio_data = np.mean(audio_data, axis=1)
 
         total_duration = round(len(audio_data) / float(sample_rate), 1)
 
-        # 0.05초(50ms) 단위 프레임 크기 계산
         frame_duration = 0.05
         frame_size = int(sample_rate * frame_duration)
 
@@ -124,7 +122,6 @@ def analyze_audio_bytes(raw_audio_bytes):
             chunk = audio_data[i : i + frame_size]
             if len(chunk) == 0:
                 break
-            # RMS 계산 (상대 볼륨 값)
             rms = np.sqrt(np.mean(chunk**2))
             chunk_rms.append(rms)
 
@@ -132,8 +129,6 @@ def analyze_audio_bytes(raw_audio_bytes):
             return "NO_SPEECH"
 
         max_rms = max(chunk_rms) if max(chunk_rms) > 0 else 0.001
-
-        # 아주 미세한 소리도 포착할 수 있도록 최대 음량의 1% 선을 임계값으로 설정
         threshold = max(max_rms * 0.01, 0.0001)
 
         speech_intervals = []
@@ -203,7 +198,7 @@ def analyze_audio_bytes(raw_audio_bytes):
             "word_analysis": word_latencies,
             "max_word_latency": max_word_latency,
         }
-    except Exception as e:
+    except Exception:
         return "NO_SPEECH"
 
 
@@ -222,23 +217,20 @@ with col1:
     st.markdown("---")
     st.subheader("🎙️ 2단계: 음성 녹음")
 
-    st.write(
-        "아래 마이크 아이콘 버튼을 클릭하여 녹음을 시작하고, 다시 클릭하여"
-        " 녹음을 종료하세요."
+    st.write("아래 녹음 버튼을 눌러 지문을 읽은 후 정지 버튼을 누르세요.")
+
+    # 깔끔한 직관적 버튼 타입 컴포넌트
+    audio_record = mic_recorder(
+        start_prompt="🔴 녹음 시작",
+        stop_prompt="⏹️ 녹음 정지 및 분석",
+        key="recorder",
     )
 
-    # 단순화된 실시간 마이크 위젯
-    audio_bytes = audio_recorder(
-        text="마이크 버튼 클릭 (녹음 시작/종료)",
-        recording_color="#e84c3d",
-        neutral_color="#6c757d",
-        icon_name="microphone",
-        icon_size="2x",
-    )
-
-    if audio_bytes:
-        st.session_state.recorded_audio_bytes = audio_bytes
-        st.session_state.analysis_data = analyze_audio_bytes(audio_bytes)
+    if audio_record and "bytes" in audio_record:
+        st.session_state.recorded_audio_bytes = audio_record["bytes"]
+        st.session_state.analysis_data = analyze_audio_bytes(
+            audio_record["bytes"]
+        )
 
     with st.expander("📁 음성 파일 직접 업로드 (대체 테스트)"):
         uploaded_file = st.file_uploader(
@@ -268,7 +260,7 @@ with col2:
 
     if st.session_state.analysis_data == "NO_SPEECH":
         st.error(
-            "⚠️ **음성 수집 실패:** 입력된 음성 파일 형식 해석에 실패했거나 무음 상태입니다. 마이크 아이콘을 눌러 1초 이상 발화 후 다시 종료해 보세요."
+            "⚠️ **음성 수집 실패:** 마이크 입력을 읽지 못했습니다. 1초 이상 발화 후 정지 버튼을 눌러주세요."
         )
     elif isinstance(st.session_state.analysis_data, dict):
         data = st.session_state.analysis_data
@@ -375,5 +367,5 @@ with col2:
             )
     else:
         st.info(
-            "👈 좌측의 **[마이크 버튼]**을 눌러 녹음을 진행해보세요."
+            "👈 좌측에서 **[🔴 녹음 시작]**을 누르고 지문을 읽은 뒤 **[⏹️ 녹음 정지 및 분석]**을 누르세요."
         )
