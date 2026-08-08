@@ -3,9 +3,23 @@ import math
 import struct
 import wave
 import numpy as np
-import soundfile as sf
 import streamlit as st
 from streamlit_mic_recorder import mic_recorder
+
+# 시스템 라이브러리 예외 처리
+try:
+    import soundfile as sf
+
+    HAS_SF = True
+except Exception:
+    HAS_SF = False
+
+try:
+    from pydub import AudioSegment
+
+    HAS_PYDUB = True
+except Exception:
+    HAS_PYDUB = False
 
 
 # ---------------------------------------------------------
@@ -102,13 +116,44 @@ etymology_db = {
 
 
 # ---------------------------------------------------------
-# [soundfile 기반 안전 음성 파형 분석 함수]
+# [이중 디코딩 방어막 적용 파형 분석 함수]
 # ---------------------------------------------------------
 def analyze_audio_bytes(raw_audio_bytes):
-    try:
-        # 브라우저에서 수집된 녹음 파일 데이터 디코딩
-        audio_data, sample_rate = sf.read(io.BytesIO(raw_audio_bytes))
+    if not raw_audio_bytes:
+        return "NO_SPEECH"
 
+    audio_data = None
+    sample_rate = 44100
+
+    # 1차 시도: soundfile 사용
+    if HAS_SF:
+        try:
+            data, sr = sf.read(io.BytesIO(raw_audio_bytes))
+            audio_data = data
+            sample_rate = sr
+        except Exception:
+            audio_data = None
+
+    # 2차 시도 (soundfile 실패 시): pydub 오디오 변환 시도
+    if audio_data is None and HAS_PYDUB:
+        try:
+            seg = AudioSegment.from_file(io.BytesIO(raw_audio_bytes))
+            samples = seg.get_array_of_samples()
+            audio_data = np.array(samples, dtype=np.float32) / (
+                2.0 ** (seg.sample_width * 8 - 1)
+            )
+            sample_rate = seg.frame_rate
+            if seg.channels > 1:
+                audio_data = audio_data.reshape((-1, seg.channels)).mean(
+                    axis=1
+                )
+        except Exception:
+            audio_data = None
+
+    if audio_data is None:
+        return "NO_SPEECH"
+
+    try:
         if len(audio_data.shape) > 1:
             audio_data = np.mean(audio_data, axis=1)
 
@@ -129,7 +174,7 @@ def analyze_audio_bytes(raw_audio_bytes):
             return "NO_SPEECH"
 
         max_rms = max(chunk_rms) if max(chunk_rms) > 0 else 0.001
-        threshold = max(max_rms * 0.01, 0.0001)
+        threshold = max(max_rms * 0.005, 0.00001)  # 초고감도 감지 설정
 
         speech_intervals = []
         in_speech = False
@@ -217,22 +262,21 @@ with col1:
     st.markdown("---")
     st.subheader("🎙️ 2단계: 음성 녹음")
 
-    st.write("아래 녹음 버튼을 눌러 지문을 읽은 후 정지 버튼을 누르세요.")
+    st.write("아래 버튼을 눌러 지문을 읽은 후 정지 버튼을 누르세요.")
 
-    # 깔끔한 직관적 버튼 타입 컴포넌트
     audio_record = mic_recorder(
         start_prompt="🔴 녹음 시작",
         stop_prompt="⏹️ 녹음 정지 및 분석",
         key="recorder",
     )
 
-    if audio_record and "bytes" in audio_record:
+    if audio_record and "bytes" in audio_record and audio_record["bytes"]:
         st.session_state.recorded_audio_bytes = audio_record["bytes"]
         st.session_state.analysis_data = analyze_audio_bytes(
             audio_record["bytes"]
         )
 
-    with st.expander("📁 음성 파일 직접 업로드 (대체 테스트)"):
+    with st.expander("📁 음성 파일 직접 업로드 (테스트용)"):
         uploaded_file = st.file_uploader(
             "WAV, MP3, M4A, OGG 파일 지원",
             type=["wav", "mp3", "m4a", "ogg"],
@@ -260,7 +304,7 @@ with col2:
 
     if st.session_state.analysis_data == "NO_SPEECH":
         st.error(
-            "⚠️ **음성 수집 실패:** 마이크 입력을 읽지 못했습니다. 1초 이상 발화 후 정지 버튼을 눌러주세요."
+            "⚠️ **음성 디코딩 실패:** 브라우저 오디오 스트림이 수집되었으나 분석에 실패했습니다. GitHub에 `packages.txt`가 포함되어 Push 되었는지 확인해 보세요."
         )
     elif isinstance(st.session_state.analysis_data, dict):
         data = st.session_state.analysis_data
