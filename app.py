@@ -2,11 +2,9 @@ import base64
 import io
 import math
 import struct
-import time
 import wave
 import streamlit as st
-import streamlit.components.v1 as components
-
+from streamlit_mic_recorder import mic_recorder
 
 # ---------------------------------------------------------
 # [Compatibility] audioop 대체용 순수 Python RMS(음량) 계산 함수 (Python 3.13+ 완벽 호환)
@@ -33,7 +31,6 @@ try:
 except ImportError:
 
     class DummyAudioOp:
-
         @staticmethod
         def rms(fragment, width):
             return calculate_rms(fragment, width)
@@ -60,12 +57,6 @@ st.markdown("---")
 # ---------------------------------------------------------
 # 2. 세션 상태(Session State) 초기화
 # ---------------------------------------------------------
-if "rec_start_time" not in st.session_state:
-    st.session_state.rec_start_time = None
-if "is_recording" not in st.session_state:
-    st.session_state.is_recording = False
-if "final_rec_duration" not in st.session_state:
-    st.session_state.final_rec_duration = None
 if "analysis_data" not in st.session_state:
     st.session_state.analysis_data = None
 if "recorded_audio_bytes" not in st.session_state:
@@ -112,73 +103,6 @@ etymology_db = {
 
 
 # ---------------------------------------------------------
-# [마이크 수집 전송 스크립트] - Auto Gain 적용
-# ---------------------------------------------------------
-def hidden_audio_recorder(is_recording):
-    js_code = f"""
-    <div id="recorder-status" style="font-size:11px; color:#888;"></div>
-    <script>
-    window.audioChunks = window.audioChunks || [];
-    window.mediaRecorder = window.mediaRecorder || null;
-
-    async function startRecording() {{
-        try {{
-            const stream = await navigator.mediaDevices.getUserMedia({{ 
-                audio: {{
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true
-                }} 
-            }});
-            window.audioChunks = [];
-            window.mediaRecorder = new MediaRecorder(stream);
-
-            window.mediaRecorder.ondataavailable = event => {{
-                if (event.data && event.data.size > 0) {{
-                    window.audioChunks.push(event.data);
-                }}
-            }};
-            window.mediaRecorder.start(100);
-            document.getElementById('recorder-status').innerText = '녹음 중...';
-        }} catch (err) {{
-            document.getElementById('recorder-status').innerText = '마이크 접근 실패: ' + err.message;
-        }}
-    }}
-
-    function stopRecording() {{
-        if (window.mediaRecorder && window.mediaRecorder.state !== "inactive") {{
-            window.mediaRecorder.onstop = () => {{
-                const audioBlob = new Blob(window.audioChunks, {{ type: 'audio/wav' }});
-                const reader = new FileReader();
-                reader.readAsDataURL(audioBlob);
-                reader.onloadend = () => {{
-                    const base64Audio = reader.result.split(',')[1];
-                    if (window.Streamlit) {{
-                        window.Streamlit.setComponentValue(base64Audio);
-                    }} else {{
-                        window.parent.postMessage({{
-                            type: 'streamlit:setComponentValue',
-                            value: base64Audio
-                        }}, '*');
-                    }}
-                }};
-            }};
-            window.mediaRecorder.stop();
-            document.getElementById('recorder-status').innerText = '녹음 완료 전송 중';
-        }}
-    }}
-
-    if ({'true' if is_recording else 'false'}) {{
-        startRecording();
-    }} else {{
-        stopRecording();
-    }}
-    </script>
-    """
-    return components.html(js_code, height=25, width=200)
-
-
-# ---------------------------------------------------------
 # [고감도 음성 파형 분석 함수]
 # ---------------------------------------------------------
 def analyze_audio_bytes(audio_bytes):
@@ -208,8 +132,6 @@ def analyze_audio_bytes(audio_bytes):
             return "NO_SPEECH"
 
         max_rms = max(chunk_rms) if max(chunk_rms) > 0 else 1
-
-        # 감도 향상: 미세 음성 감지를 위한 threshold 설정
         threshold = max(max_rms * 0.05, 10)
 
         speech_intervals = []
@@ -279,7 +201,7 @@ def analyze_audio_bytes(audio_bytes):
             "word_analysis": word_latencies,
             "max_word_latency": max_word_latency,
         }
-    except Exception:
+    except Exception as e:
         return "NO_SPEECH"
 
 
@@ -296,93 +218,35 @@ with col1:
     )
 
     st.markdown("---")
-    st.subheader("🎙️ 2단계: 녹음 제어 및 데이터 분석")
+    st.subheader("🎙️ 2단계: 음성 녹음")
 
-    rec_audio_data = hidden_audio_recorder(st.session_state.is_recording)
-    if rec_audio_data and isinstance(rec_audio_data, str):
-        try:
-            st.session_state.recorded_audio_bytes = base64.b64decode(
-                rec_audio_data
-            )
-        except Exception:
-            pass
+    st.write("아래 녹음 버튼을 눌러 지문을 읽은 후 정지 버튼을 누르세요.")
 
-    @st.fragment(run_every=0.1)
-    def render_recording_section():
-        if not st.session_state.is_recording:
-            if st.session_state.final_rec_duration is not None:
-                st.markdown(
-                    f"""
-                    <div style="background-color: #f0fff4; border: 2px solid #68d391; border-radius: 10px; padding: 12px; text-align: center; margin-bottom: 12px;">
-                        <div style="font-size: 13px; color: #276749; font-weight: bold;">🟢 녹음 완료 (총 녹음 시간)</div>
-                        <div style="font-size: 28px; font-weight: bold; color: #2f855a; font-family: monospace;">{st.session_state.final_rec_duration:.1f} 초</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
+    # 마이크 녹음 컴포넌트
+    audio_record = mic_recorder(
+        start_prompt="🔴 녹음 시작",
+        stop_prompt="⏹️ 녹음 정지 및 분석",
+        key="recorder",
+    )
 
-            if st.button(
-                "🔴 녹음 시작", use_container_width=True, type="primary"
-            ):
-                st.session_state.is_recording = True
-                st.session_state.rec_start_time = time.time()
-                st.session_state.final_rec_duration = None
-                st.session_state.analysis_data = None
-                st.session_state.recorded_audio_bytes = None
-                st.rerun()
-        else:
-            current_dur = round(
-                time.time() - st.session_state.rec_start_time, 1
-            )
+    if audio_record and "bytes" in audio_record:
+        st.session_state.recorded_audio_bytes = audio_record["bytes"]
+        st.session_state.analysis_data = analyze_audio_bytes(
+            audio_record["bytes"]
+        )
 
-            st.markdown(
-                f"""
-                <div style="background-color: #fff5f5; border: 2px solid #feb2b2; border-radius: 10px; padding: 12px; text-align: center; margin-bottom: 12px;">
-                    <div style="font-size: 13px; color: #c53030; font-weight: bold;">🎙️ 실시간 녹음 진행 중</div>
-                    <div style="font-size: 28px; font-weight: bold; color: #e53e3e; font-family: monospace;">{current_dur:.1f} 초</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-            if st.button("⏹️ 녹음 정지 및 분석 실행", use_container_width=True):
-                end_time = time.time()
-                rec_duration = max(
-                    round(end_time - st.session_state.rec_start_time, 1), 1.0
-                )
-
-                if st.session_state.recorded_audio_bytes:
-                    res = analyze_audio_bytes(
-                        st.session_state.recorded_audio_bytes
-                    )
-                else:
-                    res = "NO_SPEECH"
-
-                st.session_state.final_rec_duration = rec_duration
-                st.session_state.analysis_data = res
-                st.session_state.is_recording = False
-                st.rerun()
-
-    render_recording_section()
-
-    with st.expander("📁 마이크 녹음이 안 될 경우 (음성 파일 업로드)"):
+    with st.expander("📁 음성 파일 직접 업로드 (대체 방법)"):
         uploaded_file = st.file_uploader(
-            "WAV 음성 파일을 직접 올려서 분석해보세요.", type=["wav"]
+            "WAV 음성 파일을 올려서 테스트해보세요.", type=["wav"]
         )
         if uploaded_file is not None:
             audio_bytes = uploaded_file.read()
             st.session_state.recorded_audio_bytes = audio_bytes
             st.session_state.analysis_data = analyze_audio_bytes(audio_bytes)
-            st.session_state.final_rec_duration = round(
-                len(audio_bytes) / 32000, 1
-            )
-            st.success("파일 업로드 완료! 오른쪽 분석 결과를 확인하세요.")
+            st.success("파일 분석이 완료되었습니다!")
 
     st.markdown("---")
-    if st.button("🗑️ 전체 상태 리셋", use_container_width=True):
-        st.session_state.rec_start_time = None
-        st.session_state.is_recording = False
-        st.session_state.final_rec_duration = None
+    if st.button("🗑️ 분석 결과 초기화", use_container_width=True):
         st.session_state.analysis_data = None
         st.session_state.recorded_audio_bytes = None
         st.rerun()
@@ -392,17 +256,13 @@ with col2:
     st.subheader("📊 실시간 음성 분석 및 Latency 결과")
 
     if st.session_state.recorded_audio_bytes is not None:
-        st.markdown("##### 🔊 수집된 음성 재생 테스트")
+        st.markdown("##### 🔊 녹음된 음성 확인")
         st.audio(st.session_state.recorded_audio_bytes, format="audio/wav")
         st.markdown("---")
 
     if st.session_state.analysis_data == "NO_SPEECH":
         st.error(
-            "⚠️ **음성 수집 실패:** 브라우저의 마이크 접근 보안 문제로 오디오"
-            " 데이터가 전달되지 못했습니다.\n\n"
-            "**해결 방법:**\n"
-            "1. Chrome 주소창 왼쪽 자물쇠(🔒) 아이콘 ➔ **'마이크' 허용**으로 설정 후 새로고침(F5)\n"
-            "2. 하단의 **'음성 파일 업로드'** 탭을 통해 WAV 파일로 테스트"
+            "⚠️ 음성 데이터 분석에 실패했습니다. 마이크 소리가 너무 작거나 녹음된 내용이 없습니다."
         )
     elif isinstance(st.session_state.analysis_data, dict):
         data = st.session_state.analysis_data
@@ -509,6 +369,5 @@ with col2:
             )
     else:
         st.info(
-            "👈 좌측에서 **[🔴 녹음 시작]** 후 **[⏹️ 녹음 정지 및 분석 실행]**을"
-            " 누르시면 즉시 단어별 Latency 분석 데이터와 비계 힌트가 출력됩니다."
+            "👈 좌측에서 **[🔴 녹음 시작]**을 누르고 지문을 읽은 뒤 **[⏹️ 녹음 정지 및 분석]**을 누르세요."
         )
