@@ -1,14 +1,13 @@
-import base64
 import io
 import math
 import struct
 import wave
+import numpy as np
 import streamlit as st
-import streamlit.components.v1 as components
 
 
 # ---------------------------------------------------------
-# [Pure Python] 별도 외부 라이브러리 없는 음량(RMS) 분석 함수
+# [Pure Python] 별도 외부 C 라이브러리 없는 음량(RMS) 분석 함수
 # ---------------------------------------------------------
 def calculate_rms(fragment, width):
     if not fragment:
@@ -88,7 +87,7 @@ etymology_db = {
 
 
 # ---------------------------------------------------------
-# [Pure WAV 파형 분석 함수]
+# [WAV 분석 함수]
 # ---------------------------------------------------------
 def analyze_audio_bytes(raw_audio_bytes):
     try:
@@ -208,98 +207,17 @@ with col1:
     st.markdown("---")
     st.subheader("🎙️ 2단계: 음성 녹음")
 
-    # 브라우저 전용 HTML5 WAV Recorder (외부 패키지 미사용)
-    html_code = """
-    <div style="font-family: sans-serif; text-align: center; padding: 10px; border: 1px solid #e2e8f0; border-radius: 10px; background: #f8fafc;">
-        <button id="recordBtn" style="background-color: #ef4444; color: white; border: none; padding: 12px 24px; font-size: 16px; font-weight: bold; border-radius: 6px; cursor: pointer; margin-right: 8px;">
-            🔴 녹음 시작
-        </button>
-        <button id="stopBtn" disabled style="background-color: #94a3b8; color: white; border: none; padding: 12px 24px; font-size: 16px; font-weight: bold; border-radius: 6px; cursor: not-allowed;">
-            ⏹️ 녹음 정지 및 분석
-        </button>
-        <p id="status" style="margin-top: 10px; font-size: 14px; color: #64748b; font-weight: 500;">버튼을 눌러 녹음을 시작하세요.</p>
-    </div>
+    # 공식 내장 마이크 입력 위젯 (가장 안정적임)
+    audio_value = st.audio_input("마이크 버튼을 눌러 발화를 시작하세요")
 
-    <script>
-    let mediaRecorder;
-    let audioChunks = [];
-    const recordBtn = document.getElementById('recordBtn');
-    const stopBtn = document.getElementById('stopBtn');
-    const status = document.getElementById('status');
+    if audio_value is not None:
+        audio_bytes = audio_value.read()
+        st.session_state.recorded_audio_bytes = audio_bytes
+        st.session_state.analysis_data = analyze_audio_bytes(audio_bytes)
 
-    recordBtn.onclick = async () => {
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            mediaRecorder = new MediaRecorder(stream);
-            audioChunks = [];
-
-            mediaRecorder.ondataavailable = event => {
-                if (event.data.size > 0) audioChunks.push(event.data);
-            };
-
-            mediaRecorder.onstop = async () => {
-                const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
-                const reader = new FileReader();
-                reader.readAsDataURL(audioBlob);
-                reader.onloadend = () => {
-                    const base64Audio = reader.result.split(',')[1];
-                    const input = document.createElement('input');
-                    input.type = 'hidden';
-                    input.name = 'audio_data';
-                    input.value = base64Audio;
-                    
-                    // Streamlit query param 방식으로 데이터 전달
-                    const parentUrl = new URL(window.parent.location.href);
-                    parentUrl.searchParams.set('rec_data', base64Audio);
-                    window.parent.location.href = parentUrl.toString();
-                };
-            };
-
-            mediaRecorder.start();
-            recordBtn.disabled = true;
-            recordBtn.style.backgroundColor = '#94a3b8';
-            recordBtn.style.cursor = 'not-allowed';
-            
-            stopBtn.disabled = false;
-            stopBtn.style.backgroundColor = '#3b82f6';
-            stopBtn.style.cursor = 'pointer';
-            
-            status.innerText = '🎙️ 녹음 중입니다... 지문을 읽어주세요.';
-            status.style.color = '#ef4444';
-        } catch (err) {
-            status.innerText = '❌ 마이크 접근 권한 오류: 브라우저 마이크 허용을 확인하세요.';
-            status.style.color = '#dc2626';
-        }
-    };
-
-    stopBtn.onclick = () => {
-        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-            mediaRecorder.stop();
-            status.innerText = '⏳ 음성 데이터를 처리하고 있습니다...';
-            status.style.color = '#3b82f6';
-        }
-    };
-    </script>
-    """
-
-    # URL query_params 통해 녹음 데이터 전달 확인
-    query_params = st.query_params
-    if "rec_data" in query_params:
-        try:
-            raw_b64 = query_params["rec_data"]
-            audio_bytes = base64.b64decode(raw_b64)
-            st.session_state.recorded_audio_bytes = audio_bytes
-            st.session_state.analysis_data = analyze_audio_bytes(audio_bytes)
-            # URL 파라미터 정리
-            st.query_params.clear()
-        except Exception:
-            pass
-
-    components.html(html_code, height=140)
-
-    with st.expander("📁 음성 파일 직접 업로드 (100% 보장 방법)"):
+    with st.expander("📁 음성 파일 직접 업로드 (대체 테스트)"):
         uploaded_file = st.file_uploader(
-            "WAV 음성 파일 업로드", type=["wav"]
+            "WAV 음성 파일 직접 업로드", type=["wav"]
         )
         if uploaded_file is not None:
             file_bytes = uploaded_file.read()
@@ -311,7 +229,6 @@ with col1:
     if st.button("🗑️ 분석 결과 초기화", use_container_width=True):
         st.session_state.analysis_data = None
         st.session_state.recorded_audio_bytes = None
-        st.query_params.clear()
         st.rerun()
 
 # [RIGHT COLUMN]
@@ -319,13 +236,13 @@ with col2:
     st.subheader("📊 실시간 음성 분석 및 Latency 결과")
 
     if st.session_state.recorded_audio_bytes is not None:
-        st.markdown("##### 🔊 녹음된 음성 플레이어")
+        st.markdown("##### 🔊 녹음된 음성 확인")
         st.audio(st.session_state.recorded_audio_bytes, format="audio/wav")
         st.markdown("---")
 
     if st.session_state.analysis_data == "NO_SPEECH":
         st.error(
-            "⚠️ **음성 수집 실패:** 음성 데이터 파형 해석에 실패했습니다. 녹음 시간이 너무 짧거나 음량이 작을 수 있습니다."
+            "⚠️ **음성 분석 실패:** 마이크 음성 신호 해석에 실패했습니다. 마이크 접근 권한 및 발화 상태를 확인해 주세요."
         )
     elif isinstance(st.session_state.analysis_data, dict):
         data = st.session_state.analysis_data
@@ -432,5 +349,5 @@ with col2:
             )
     else:
         st.info(
-            "👈 좌측에서 **[🔴 녹음 시작]**을 누르고 지문을 읽은 뒤 **[⏹️ 녹음 정지 및 분석]**을 누르세요."
+            "👈 좌측에서 마이크 아이콘을 눌러 녹음 후 완료 버튼을 누르세요."
         )
