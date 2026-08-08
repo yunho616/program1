@@ -48,6 +48,8 @@ if "analysis_data" not in st.session_state:
     st.session_state.analysis_data = None
 if "recorded_audio_bytes" not in st.session_state:
     st.session_state.recorded_audio_bytes = None
+if "audio_input_key" not in st.session_state:
+    st.session_state.audio_input_key = 0
 
 sample_text = (
     "The quick brown fox jumps over the lazy dog.\nThe fox is very fast."
@@ -207,8 +209,11 @@ with col1:
     st.markdown("---")
     st.subheader("🎙️ 2단계: 음성 녹음")
 
-    # 공식 내장 마이크 입력 위젯 (가장 안정적임)
-    audio_value = st.audio_input("마이크 버튼을 눌러 발화를 시작하세요")
+    # 가변 key를 부여하여 초기화 버튼 클릭 시 마이크 위젯 상태도 같이 완전히 리셋되도록 구성
+    audio_widget_key = f"audio_input_widget_{st.session_state.audio_input_key}"
+    audio_value = st.audio_input(
+        "마이크 버튼을 눌러 발화를 시작하세요", key=audio_widget_key
+    )
 
     if audio_value is not None:
         audio_bytes = audio_value.read()
@@ -217,7 +222,9 @@ with col1:
 
     with st.expander("📁 음성 파일 직접 업로드 (대체 테스트)"):
         uploaded_file = st.file_uploader(
-            "WAV 음성 파일 직접 업로드", type=["wav"]
+            "WAV 음성 파일 직접 업로드",
+            type=["wav"],
+            key=f"file_uploader_{st.session_state.audio_input_key}",
         )
         if uploaded_file is not None:
             file_bytes = uploaded_file.read()
@@ -229,6 +236,8 @@ with col1:
     if st.button("🗑️ 분석 결과 초기화", use_container_width=True):
         st.session_state.analysis_data = None
         st.session_state.recorded_audio_bytes = None
+        # 마이크 위젯 및 파일 업로더 key 값을 변경하여 컴포넌트를 강제 리셋
+        st.session_state.audio_input_key += 1
         st.rerun()
 
 # [RIGHT COLUMN]
