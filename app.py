@@ -1,29 +1,14 @@
+import base64
 import io
 import math
 import struct
 import wave
-import numpy as np
 import streamlit as st
-from streamlit_mic_recorder import mic_recorder
-
-# 시스템 라이브러리 예외 처리
-try:
-    import soundfile as sf
-
-    HAS_SF = True
-except Exception:
-    HAS_SF = False
-
-try:
-    from pydub import AudioSegment
-
-    HAS_PYDUB = True
-except Exception:
-    HAS_PYDUB = False
+import streamlit.components.v1 as components
 
 
 # ---------------------------------------------------------
-# [Compatibility] audioop 대체용 순수 Python RMS(음량) 계산 함수
+# [Pure Python] 별도 외부 라이브러리 없는 음량(RMS) 분석 함수
 # ---------------------------------------------------------
 def calculate_rms(fragment, width):
     if not fragment:
@@ -39,19 +24,6 @@ def calculate_rms(fragment, width):
         return int(math.sqrt(sum_squares / count))
     except Exception:
         return 0
-
-
-try:
-    import audioop
-except ImportError:
-
-    class DummyAudioOp:
-
-        @staticmethod
-        def rms(fragment, width):
-            return calculate_rms(fragment, width)
-
-    audioop = DummyAudioOp()
 
 
 # ---------------------------------------------------------
@@ -116,65 +88,39 @@ etymology_db = {
 
 
 # ---------------------------------------------------------
-# [이중 디코딩 방어막 적용 파형 분석 함수]
+# [Pure WAV 파형 분석 함수]
 # ---------------------------------------------------------
 def analyze_audio_bytes(raw_audio_bytes):
-    if not raw_audio_bytes:
-        return "NO_SPEECH"
-
-    audio_data = None
-    sample_rate = 44100
-
-    # 1차 시도: soundfile 사용
-    if HAS_SF:
-        try:
-            data, sr = sf.read(io.BytesIO(raw_audio_bytes))
-            audio_data = data
-            sample_rate = sr
-        except Exception:
-            audio_data = None
-
-    # 2차 시도 (soundfile 실패 시): pydub 오디오 변환 시도
-    if audio_data is None and HAS_PYDUB:
-        try:
-            seg = AudioSegment.from_file(io.BytesIO(raw_audio_bytes))
-            samples = seg.get_array_of_samples()
-            audio_data = np.array(samples, dtype=np.float32) / (
-                2.0 ** (seg.sample_width * 8 - 1)
-            )
-            sample_rate = seg.frame_rate
-            if seg.channels > 1:
-                audio_data = audio_data.reshape((-1, seg.channels)).mean(
-                    axis=1
-                )
-        except Exception:
-            audio_data = None
-
-    if audio_data is None:
-        return "NO_SPEECH"
-
     try:
-        if len(audio_data.shape) > 1:
-            audio_data = np.mean(audio_data, axis=1)
+        wav_file = wave.open(io.BytesIO(raw_audio_bytes), "rb")
+        nchannels = wav_file.getnchannels()
+        sampwidth = wav_file.getsampwidth()
+        framerate = wav_file.getframerate()
+        nframes = wav_file.getnframes()
 
-        total_duration = round(len(audio_data) / float(sample_rate), 1)
+        if nframes == 0 or framerate == 0:
+            return "NO_SPEECH"
+
+        total_duration = round(nframes / float(framerate), 1)
 
         frame_duration = 0.05
-        frame_size = int(sample_rate * frame_duration)
+        frame_size = int(framerate * frame_duration)
 
         chunk_rms = []
-        for i in range(0, len(audio_data), frame_size):
-            chunk = audio_data[i : i + frame_size]
-            if len(chunk) == 0:
+        for _ in range(0, nframes, frame_size):
+            frames = wav_file.readframes(frame_size)
+            if len(frames) < frame_size * sampwidth * nchannels:
                 break
-            rms = np.sqrt(np.mean(chunk**2))
+            rms = calculate_rms(frames, sampwidth)
             chunk_rms.append(rms)
+
+        wav_file.close()
 
         if not chunk_rms:
             return "NO_SPEECH"
 
-        max_rms = max(chunk_rms) if max(chunk_rms) > 0 else 0.001
-        threshold = max(max_rms * 0.005, 0.00001)  # 초고감도 감지 설정
+        max_rms = max(chunk_rms) if max(chunk_rms) > 0 else 1
+        threshold = max(max_rms * 0.02, 5)
 
         speech_intervals = []
         in_speech = False
@@ -262,24 +208,98 @@ with col1:
     st.markdown("---")
     st.subheader("🎙️ 2단계: 음성 녹음")
 
-    st.write("아래 버튼을 눌러 지문을 읽은 후 정지 버튼을 누르세요.")
+    # 브라우저 전용 HTML5 WAV Recorder (외부 패키지 미사용)
+    html_code = """
+    <div style="font-family: sans-serif; text-align: center; padding: 10px; border: 1px solid #e2e8f0; border-radius: 10px; background: #f8fafc;">
+        <button id="recordBtn" style="background-color: #ef4444; color: white; border: none; padding: 12px 24px; font-size: 16px; font-weight: bold; border-radius: 6px; cursor: pointer; margin-right: 8px;">
+            🔴 녹음 시작
+        </button>
+        <button id="stopBtn" disabled style="background-color: #94a3b8; color: white; border: none; padding: 12px 24px; font-size: 16px; font-weight: bold; border-radius: 6px; cursor: not-allowed;">
+            ⏹️ 녹음 정지 및 분석
+        </button>
+        <p id="status" style="margin-top: 10px; font-size: 14px; color: #64748b; font-weight: 500;">버튼을 눌러 녹음을 시작하세요.</p>
+    </div>
 
-    audio_record = mic_recorder(
-        start_prompt="🔴 녹음 시작",
-        stop_prompt="⏹️ 녹음 정지 및 분석",
-        key="recorder",
-    )
+    <script>
+    let mediaRecorder;
+    let audioChunks = [];
+    const recordBtn = document.getElementById('recordBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const status = document.getElementById('status');
 
-    if audio_record and "bytes" in audio_record and audio_record["bytes"]:
-        st.session_state.recorded_audio_bytes = audio_record["bytes"]
-        st.session_state.analysis_data = analyze_audio_bytes(
-            audio_record["bytes"]
-        )
+    recordBtn.onclick = async () => {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(stream);
+            audioChunks = [];
 
-    with st.expander("📁 음성 파일 직접 업로드 (테스트용)"):
+            mediaRecorder.ondataavailable = event => {
+                if (event.data.size > 0) audioChunks.push(event.data);
+            };
+
+            mediaRecorder.onstop = async () => {
+                const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                const reader = new FileReader();
+                reader.readAsDataURL(audioBlob);
+                reader.onloadend = () => {
+                    const base64Audio = reader.result.split(',')[1];
+                    const input = document.createElement('input');
+                    input.type = 'hidden';
+                    input.name = 'audio_data';
+                    input.value = base64Audio;
+                    
+                    // Streamlit query param 방식으로 데이터 전달
+                    const parentUrl = new URL(window.parent.location.href);
+                    parentUrl.searchParams.set('rec_data', base64Audio);
+                    window.parent.location.href = parentUrl.toString();
+                };
+            };
+
+            mediaRecorder.start();
+            recordBtn.disabled = true;
+            recordBtn.style.backgroundColor = '#94a3b8';
+            recordBtn.style.cursor = 'not-allowed';
+            
+            stopBtn.disabled = false;
+            stopBtn.style.backgroundColor = '#3b82f6';
+            stopBtn.style.cursor = 'pointer';
+            
+            status.innerText = '🎙️ 녹음 중입니다... 지문을 읽어주세요.';
+            status.style.color = '#ef4444';
+        } catch (err) {
+            status.innerText = '❌ 마이크 접근 권한 오류: 브라우저 마이크 허용을 확인하세요.';
+            status.style.color = '#dc2626';
+        }
+    };
+
+    stopBtn.onclick = () => {
+        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+            mediaRecorder.stop();
+            status.innerText = '⏳ 음성 데이터를 처리하고 있습니다...';
+            status.style.color = '#3b82f6';
+        }
+    };
+    </script>
+    """
+
+    # URL query_params 통해 녹음 데이터 전달 확인
+    query_params = st.query_params
+    if "rec_data" in query_params:
+        try:
+            raw_b64 = query_params["rec_data"]
+            audio_bytes = base64.b64decode(raw_b64)
+            st.session_state.recorded_audio_bytes = audio_bytes
+            st.session_state.analysis_data = analyze_audio_bytes(audio_bytes)
+            # URL 파라미터 정리
+            st.query_params.clear()
+        except Exception:
+            pass
+
+    components.html(html_code, height=140)
+
+    with st.expander("📁 음성 파일 직접 업로드 (100% 보장 방법)"):
         uploaded_file = st.file_uploader(
-            "WAV, MP3, M4A, OGG 파일 지원",
-            type=["wav", "mp3", "m4a", "ogg"],
+            "WAV 음성 파일 업로드", type=["wav"]
         )
         if uploaded_file is not None:
             file_bytes = uploaded_file.read()
@@ -291,6 +311,7 @@ with col1:
     if st.button("🗑️ 분석 결과 초기화", use_container_width=True):
         st.session_state.analysis_data = None
         st.session_state.recorded_audio_bytes = None
+        st.query_params.clear()
         st.rerun()
 
 # [RIGHT COLUMN]
@@ -299,12 +320,12 @@ with col2:
 
     if st.session_state.recorded_audio_bytes is not None:
         st.markdown("##### 🔊 녹음된 음성 플레이어")
-        st.audio(st.session_state.recorded_audio_bytes)
+        st.audio(st.session_state.recorded_audio_bytes, format="audio/wav")
         st.markdown("---")
 
     if st.session_state.analysis_data == "NO_SPEECH":
         st.error(
-            "⚠️ **음성 디코딩 실패:** 브라우저 오디오 스트림이 수집되었으나 분석에 실패했습니다. GitHub에 `packages.txt`가 포함되어 Push 되었는지 확인해 보세요."
+            "⚠️ **음성 수집 실패:** 음성 데이터 파형 해석에 실패했습니다. 녹음 시간이 너무 짧거나 음량이 작을 수 있습니다."
         )
     elif isinstance(st.session_state.analysis_data, dict):
         data = st.session_state.analysis_data
