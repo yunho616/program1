@@ -1,13 +1,21 @@
-import base64
 import io
 import math
 import struct
 import wave
 import streamlit as st
+
+# pydub 오디오 파일 자동 변환용 import
+try:
+    from pydub import AudioSegment
+    HAS_PYDUB = True
+except ImportError:
+    HAS_PYDUB = False
+
 from streamlit_mic_recorder import mic_recorder
 
+
 # ---------------------------------------------------------
-# [Compatibility] audioop 대체용 순수 Python RMS(음량) 계산 함수 (Python 3.13+ 완벽 호환)
+# [Compatibility] audioop 대체용 순수 Python RMS(음량) 계산 함수
 # ---------------------------------------------------------
 def calculate_rms(fragment, width):
     if not fragment:
@@ -25,12 +33,12 @@ def calculate_rms(fragment, width):
         return 0
 
 
-# audioop 모듈 라이브러리 예외 처리 (Streamlit Cloud 대응)
 try:
     import audioop
 except ImportError:
 
     class DummyAudioOp:
+
         @staticmethod
         def rms(fragment, width):
             return calculate_rms(fragment, width)
@@ -62,12 +70,10 @@ if "analysis_data" not in st.session_state:
 if "recorded_audio_bytes" not in st.session_state:
     st.session_state.recorded_audio_bytes = None
 
-# 학습 지문
 sample_text = (
     "The quick brown fox jumps over the lazy dog.\nThe fox is very fast."
 )
 
-# 학습 지문 단어 리스트
 target_words = [
     "The",
     "quick",
@@ -85,7 +91,6 @@ target_words = [
     "fast.",
 ]
 
-# 어원 DB
 etymology_db = {
     "The": "고대 영어 þæt (지시대명사/정관사)",
     "quick": "고대 영어 cwic (살아있는, 활발한)",
@@ -103,11 +108,24 @@ etymology_db = {
 
 
 # ---------------------------------------------------------
-# [고감도 음성 파형 분석 함수]
+# [포맷 변환 지원 고감도 파형 분석 함수]
 # ---------------------------------------------------------
-def analyze_audio_bytes(audio_bytes):
+def analyze_audio_bytes(raw_audio_bytes):
     try:
-        wav_file = wave.open(io.BytesIO(audio_bytes), "rb")
+        # 1. 브라우저 녹음 바이너리를 표준 WAV 데이터로 자동 변환 시도
+        wav_bytes = raw_audio_bytes
+        if HAS_PYDUB:
+            try:
+                audio_seg = AudioSegment.from_file(
+                    io.BytesIO(raw_audio_bytes)
+                )
+                wav_io = io.BytesIO()
+                audio_seg.export(wav_io, format="wav")
+                wav_bytes = wav_io.getvalue()
+            except Exception:
+                pass
+
+        wav_file = wave.open(io.BytesIO(wav_bytes), "rb")
         nchannels = wav_file.getnchannels()
         sampwidth = wav_file.getsampwidth()
         framerate = wav_file.getframerate()
@@ -132,7 +150,9 @@ def analyze_audio_bytes(audio_bytes):
             return "NO_SPEECH"
 
         max_rms = max(chunk_rms) if max(chunk_rms) > 0 else 1
-        threshold = max(max_rms * 0.05, 10)
+
+        # 감도 대폭 상향: 최대 음량의 2% 수준 및 최소 1 이상이면 음성으로 간주
+        threshold = max(max_rms * 0.02, 1)
 
         speech_intervals = []
         in_speech = False
@@ -153,8 +173,9 @@ def analyze_audio_bytes(audio_bytes):
                 (start_idx * frame_duration, len(chunk_rms) * frame_duration)
             )
 
+        # 음성 구간을 포착하지 못하더라도 예외 방지를 위한 최소 기본값 할당
         if not speech_intervals:
-            speech_intervals = [(0.2, total_duration)]
+            speech_intervals = [(0.1, max(total_duration, 0.5))]
 
         first_latency = round(speech_intervals[0][0], 2)
 
@@ -166,8 +187,8 @@ def analyze_audio_bytes(audio_bytes):
                 start_sec = round(speech_intervals[idx][0], 2)
                 end_sec = round(speech_intervals[idx][1], 2)
             else:
-                start_sec = round(prev_end + 0.4, 2)
-                end_sec = round(start_sec + 0.3, 2)
+                start_sec = round(prev_end + 0.3, 2)
+                end_sec = round(start_sec + 0.2, 2)
 
             if idx == 0:
                 latency = first_latency
@@ -210,7 +231,7 @@ def analyze_audio_bytes(audio_bytes):
 # ---------------------------------------------------------
 col1, col2 = st.columns([1, 1])
 
-# [LEFT COLUMN] 지문 및 녹음 제어
+# [LEFT COLUMN]
 with col1:
     st.subheader("📖 1단계: 영어 지문 읽기 및 준비")
     st.text_area(
@@ -222,7 +243,6 @@ with col1:
 
     st.write("아래 녹음 버튼을 눌러 지문을 읽은 후 정지 버튼을 누르세요.")
 
-    # 마이크 녹음 컴포넌트
     audio_record = mic_recorder(
         start_prompt="🔴 녹음 시작",
         stop_prompt="⏹️ 녹음 정지 및 분석",
@@ -237,7 +257,7 @@ with col1:
 
     with st.expander("📁 음성 파일 직접 업로드 (대체 방법)"):
         uploaded_file = st.file_uploader(
-            "WAV 음성 파일을 올려서 테스트해보세요.", type=["wav"]
+            "WAV/MP3/M4A 음성 파일 올려서 테스트", type=["wav", "mp3", "m4a"]
         )
         if uploaded_file is not None:
             audio_bytes = uploaded_file.read()
@@ -251,18 +271,21 @@ with col1:
         st.session_state.recorded_audio_bytes = None
         st.rerun()
 
-# [RIGHT COLUMN] 음성 데이터 분석 및 비계 출력
+# [RIGHT COLUMN]
 with col2:
     st.subheader("📊 실시간 음성 분석 및 Latency 결과")
 
     if st.session_state.recorded_audio_bytes is not None:
-        st.markdown("##### 🔊 녹음된 음성 확인")
-        st.audio(st.session_state.recorded_audio_bytes, format="audio/wav")
+        st.markdown("##### 🔊 녹음된 음성 플레이어")
+        st.audio(st.session_state.recorded_audio_bytes)
         st.markdown("---")
 
     if st.session_state.analysis_data == "NO_SPEECH":
         st.error(
-            "⚠️ 음성 데이터 분석에 실패했습니다. 마이크 소리가 너무 작거나 녹음된 내용이 없습니다."
+            "⚠️ **음성 데이터 인식 실패:**\n\n"
+            "1. 마이크 입력 볼륨이 너무 작은지 확인해 주세요.\n"
+            "2. Windows/Mac **시스템 설정 ➔ 소리 ➔ 입력 마이크 볼륨**을 높여주세요.\n"
+            "3. 아래 '음성 파일 직접 업로드'로 테스트용 WAV/MP3 파일을 등록해보세요."
         )
     elif isinstance(st.session_state.analysis_data, dict):
         data = st.session_state.analysis_data
