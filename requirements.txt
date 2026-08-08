@@ -1,3 +1,4 @@
 streamlit
-pydub
-streamlit-mic-recorder
+audio-recorder-streamlit
+soundfile
+numpy
