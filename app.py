@@ -1,13 +1,15 @@
+import base64
 import io
 import math
 import struct
 import wave
 import numpy as np
 import streamlit as st
+import streamlit.components.v1 as components
 
 
 # ---------------------------------------------------------
-# [Pure Python] 별도 외부 C 라이브러리 없는 음량(RMS) 분석 함수
+# [Pure Python] 음량(RMS) 분석 함수
 # ---------------------------------------------------------
 def calculate_rms(fragment, width):
     if not fragment:
@@ -48,28 +50,17 @@ if "analysis_data" not in st.session_state:
     st.session_state.analysis_data = None
 if "recorded_audio_bytes" not in st.session_state:
     st.session_state.recorded_audio_bytes = None
-if "audio_input_key" not in st.session_state:
-    st.session_state.audio_input_key = 0
+if "recorder_key" not in st.session_state:
+    st.session_state.recorder_key = 0
 
 sample_text = (
     "The quick brown fox jumps over the lazy dog.\nThe fox is very fast."
 )
 
 target_words = [
-    "The",
-    "quick",
-    "brown",
-    "fox",
-    "jumps",
-    "over",
-    "the",
-    "lazy",
-    "dog.",
-    "The",
-    "fox",
-    "is",
-    "very",
-    "fast.",
+    "The", "quick", "brown", "fox", "jumps",
+    "over", "the", "lazy", "dog.", "The",
+    "fox", "is", "very", "fast."
 ]
 
 etymology_db = {
@@ -84,12 +75,12 @@ etymology_db = {
     "dog.": "고대 영어 docga (개)",
     "is": "고대 영어 is (있다, 이다)",
     "very": "고대 프랑스어 verai (진실한, 매우)",
-    "fast.": "고대 영어 fæst (단단한, 확고한, 빠른)",
+    "fast.": "고대 영어 fæst (단단한, 확고한, 빠른)"
 }
 
 
 # ---------------------------------------------------------
-# [WAV 분석 함수]
+# 3. WAV 분석 함수
 # ---------------------------------------------------------
 def analyze_audio_bytes(raw_audio_bytes):
     try:
@@ -167,20 +158,18 @@ def analyze_audio_bytes(raw_audio_bytes):
             word_latencies.append({
                 "word": word_str,
                 "start": start_sec,
-                "latency": latency,
+                "latency": latency
             })
 
         total_words = len(word_latencies)
         smooth_words = sum(1 for w in word_latencies if w["latency"] < 1.0)
         pause_ratio = (
             round(100.0 - ((smooth_words / total_words) * 100.0), 1)
-            if total_words > 0
-            else 0.0
+            if total_words > 0 else 0.0
         )
         max_word_latency = (
             max([w["latency"] for w in word_latencies])
-            if word_latencies
-            else 0.0
+            if word_latencies else 0.0
         )
 
         return {
@@ -195,11 +184,11 @@ def analyze_audio_bytes(raw_audio_bytes):
 
 
 # ---------------------------------------------------------
-# UI 및 화면 레이아웃
+# 4. UI 및 레이아웃
 # ---------------------------------------------------------
 col1, col2 = st.columns([1, 1])
 
-# [LEFT COLUMN]
+# [왼쪽 칼럼]
 with col1:
     st.subheader("📖 1단계: 영어 지문 읽기 및 준비")
     st.text_area(
@@ -209,21 +198,138 @@ with col1:
     st.markdown("---")
     st.subheader("🎙️ 2단계: 음성 녹음")
 
-    audio_widget_key = f"audio_input_widget_{st.session_state.audio_input_key}"
-    audio_value = st.audio_input(
-        "마이크 버튼을 눌러 발화를 시작하세요", key=audio_widget_key
-    )
+    # URL query_params를 통한 녹음 데이터 수신 및 URL 자동 정리
+    query_params = st.query_params
+    if "rec_b64" in query_params:
+        try:
+            raw_b64 = query_params["rec_b64"]
+            audio_bytes = base64.b64decode(raw_b64)
+            st.session_state.recorded_audio_bytes = audio_bytes
+            st.session_state.analysis_data = analyze_audio_bytes(audio_bytes)
+        except Exception:
+            pass
+        st.query_params.clear()
 
-    if audio_value is not None:
-        audio_bytes = audio_value.read()
-        st.session_state.recorded_audio_bytes = audio_bytes
-        st.session_state.analysis_data = analyze_audio_bytes(audio_bytes)
+    # HTML/JS 커스텀 녹음 컴포넌트 (0.1초 타이머 + 시작/정지 버튼)
+    html_recorder = """
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; text-align: center; padding: 18px; border: 1px solid #cbd5e1; border-radius: 12px; background: #f8fafc; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+        
+        <!-- 타이머 디스플레이 (0.1초 단위) -->
+        <div style="margin-bottom: 15px;">
+            <span style="font-size: 13px; font-weight: 600; color: #64748b; letter-spacing: 0.5px;">REC TIME</span>
+            <div id="timer" style="font-size: 32px; font-weight: 700; color: #1e293b; font-family: monospace; margin-top: 2px;">0.0s</div>
+        </div>
+
+        <!-- 버튼 영역 -->
+        <div style="display: flex; gap: 10px; justify-content: center; align-items: center;">
+            <button id="startBtn" style="background-color: #ef4444; color: white; border: none; padding: 12px 20px; font-size: 15px; font-weight: 700; border-radius: 8px; cursor: pointer; transition: all 0.2s; min-width: 130px;">
+                🔴 녹음 시작
+            </button>
+            <button id="stopBtn" disabled style="background-color: #cbd5e1; color: #94a3b8; border: none; padding: 12px 20px; font-size: 15px; font-weight: 700; border-radius: 8px; cursor: not-allowed; transition: all 0.2s; min-width: 160px;">
+                ⏹️ 녹음 정지 및 분석
+            </button>
+        </div>
+
+        <!-- 상태 안내 메시지 -->
+        <div id="status" style="margin-top: 14px; font-size: 13.5px; color: #64748b; font-weight: 500;">
+            버튼을 눌러 녹음을 시작해 주세요.
+        </div>
+    </div>
+
+    <script>
+    let mediaRecorder;
+    let audioChunks = [];
+    let timerInterval = null;
+    let startTime = 0;
+
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const timerDisplay = document.getElementById('timer');
+    const statusDisplay = document.getElementById('status');
+
+    startBtn.onclick = async () => {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            
+            let options = {};
+            if (MediaRecorder.isTypeSupported('audio/webm')) {
+                options = { mimeType: 'audio/webm' };
+            }
+
+            mediaRecorder = new MediaRecorder(stream, options);
+            audioChunks = [];
+
+            mediaRecorder.ondataavailable = event => {
+                if (event.data.size > 0) audioChunks.push(event.data);
+            };
+
+            mediaRecorder.onstop = () => {
+                clearInterval(timerInterval);
+                statusDisplay.innerText = "⏳ 음성 데이터를 분석하는 중입니다...";
+                statusDisplay.style.color = "#2563eb";
+
+                const blobType = mediaRecorder.mimeType || 'audio/wav';
+                const audioBlob = new Blob(audioChunks, { type: blobType });
+                
+                const reader = new FileReader();
+                reader.readAsDataURL(audioBlob);
+                reader.onloadend = () => {
+                    const base64Audio = reader.result.split(',')[1];
+                    const parentUrl = new URL(window.parent.location.href);
+                    parentUrl.searchParams.set('rec_b64', base64Audio);
+                    window.parent.location.href = parentUrl.toString();
+                };
+            };
+
+            mediaRecorder.start(100);
+            startTime = Date.now();
+
+            // 0.1초(100ms) 간격 타이머 동작
+            timerInterval = setInterval(() => {
+                const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
+                timerDisplay.innerText = elapsedSec + "s";
+            }, 100);
+
+            // UI 상태 변경
+            startBtn.disabled = true;
+            startBtn.style.backgroundColor = "#cbd5e1";
+            startBtn.style.color = "#94a3b8";
+            startBtn.style.cursor = "not-allowed";
+
+            stopBtn.disabled = false;
+            stopBtn.style.backgroundColor = "#2563eb";
+            stopBtn.style.color = "#ffffff";
+            stopBtn.style.cursor = "pointer";
+
+            statusDisplay.innerText = "🎙️ 녹음 중입니다... 지문을 읽어주세요.";
+            statusDisplay.style.color = "#dc2626";
+
+        } catch (err) {
+            statusDisplay.innerText = "❌ 마이크 권한을 허용해 주세요.";
+            statusDisplay.style.color = "#dc2626";
+        }
+    };
+
+    stopBtn.onclick = () => {
+        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+            mediaRecorder.stop();
+            mediaRecorder.stream.getTracks().forEach(track => track.stop());
+            stopBtn.disabled = true;
+            stopBtn.style.backgroundColor = "#cbd5e1";
+            stopBtn.style.color = "#94a3b8";
+            stopBtn.style.cursor = "not-allowed";
+        }
+    };
+    </script>
+    """
+
+    components.html(html_recorder, height=180)
 
     with st.expander("📁 음성 파일 직접 업로드 (대체 테스트)"):
         uploaded_file = st.file_uploader(
             "WAV 음성 파일 직접 업로드",
             type=["wav"],
-            key=f"file_uploader_{st.session_state.audio_input_key}",
+            key=f"file_uploader_{st.session_state.recorder_key}",
         )
         if uploaded_file is not None:
             file_bytes = uploaded_file.read()
@@ -235,10 +341,11 @@ with col1:
     if st.button("🗑️ 분석 결과 초기화", use_container_width=True):
         st.session_state.analysis_data = None
         st.session_state.recorded_audio_bytes = None
-        st.session_state.audio_input_key += 1
+        st.session_state.recorder_key += 1
+        st.query_params.clear()
         st.rerun()
 
-# [RIGHT COLUMN]
+# [오른쪽 칼럼]
 with col2:
     st.subheader("📊 실시간 음성 분석 및 Latency 결과")
 
@@ -291,7 +398,6 @@ with col2:
                         border_color = "#38a169"
                         tag = "✅ 원활"
 
-                    # '시작 시점' 표시 제거
                     st.markdown(
                         f"""
                         <div style="background-color: {bg_color}; border: 1.5px solid {border_color}; border-radius: 8px; padding: 12px; text-align: center; margin-bottom: 10px;">
@@ -356,5 +462,5 @@ with col2:
             )
     else:
         st.info(
-            "👈 좌측에서 마이크 아이콘을 눌러 녹음 후 완료 버튼을 누르세요."
+            "👈 좌측에서 **[🔴 녹음 시작]**을 누르고 지문을 읽은 뒤 **[⏹️ 녹음 정지 및 분석]**을 누르세요."
         )
