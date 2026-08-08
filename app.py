@@ -209,7 +209,6 @@ with col1:
     st.markdown("---")
     st.subheader("🎙️ 2단계: 음성 녹음")
 
-    # 가변 key를 부여하여 초기화 버튼 클릭 시 마이크 위젯 상태도 같이 완전히 리셋되도록 구성
     audio_widget_key = f"audio_input_widget_{st.session_state.audio_input_key}"
     audio_value = st.audio_input(
         "마이크 버튼을 눌러 발화를 시작하세요", key=audio_widget_key
@@ -236,7 +235,6 @@ with col1:
     if st.button("🗑️ 분석 결과 초기화", use_container_width=True):
         st.session_state.analysis_data = None
         st.session_state.recorded_audio_bytes = None
-        # 마이크 위젯 및 파일 업로더 key 값을 변경하여 컴포넌트를 강제 리셋
         st.session_state.audio_input_key += 1
         st.rerun()
 
@@ -293,12 +291,12 @@ with col2:
                         border_color = "#38a169"
                         tag = "✅ 원활"
 
+                    # '시작 시점' 표시 제거
                     st.markdown(
                         f"""
-                        <div style="background-color: {bg_color}; border: 1.5px solid {border_color}; border-radius: 8px; padding: 10px; text-align: center; margin-bottom: 8px;">
-                            <div style="font-size: 16px; font-weight: bold; color: #2d3748;">{item['word']}</div>
-                            <div style="font-size: 12px; color: #718096; margin-top: 4px;">시작 시점: <b>{item['start']}초</b></div>
-                            <div style="font-size: 13px; font-weight: bold; color: {border_color}; margin-top: 2px;">Latency: {item['latency']}초</div>
+                        <div style="background-color: {bg_color}; border: 1.5px solid {border_color}; border-radius: 8px; padding: 12px; text-align: center; margin-bottom: 10px;">
+                            <div style="font-size: 17px; font-weight: bold; color: #2d3748;">{item['word']}</div>
+                            <div style="font-size: 14px; font-weight: bold; color: {border_color}; margin-top: 6px;">Latency: {item['latency']}초</div>
                             <div style="font-size: 11px; margin-top: 4px; font-weight: 500;">{tag}</div>
                         </div>
                         """,
