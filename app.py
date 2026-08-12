@@ -1,28 +1,18 @@
-"""
-Streamlit app: Latency + voice analysis with optional librosa, crepe, and webrtcvad integrations.
-
-Notes:
-- librosa, crepe, and webrtcvad are OPTIONAL. The code will attempt to import them and
-  fall back to simpler pure-Python/numpy methods if they're not available.
-- pydub + ffmpeg (or imageio-ffmpeg) is used to convert non-WAV recorder outputs to WAV.
-- This file is a single-file drop-in. Add packages to requirements.txt:
-    streamlit, numpy, pydub, imageio-ffmpeg, librosa (optional), crepe (optional), webrtcvad (optional)
-  and add "ffmpeg" to packages.txt on Streamlit Cloud, or install ffmpeg on your host.
-"""
-
 import base64
 import io
 import math
+import shutil
 import struct
+import subprocess
 import wave
 from urllib.parse import unquote_plus
-from typing import List, Tuple, Dict, Optional
+from typing import List, Optional, Tuple, Dict
 
 import numpy as np
 import streamlit as st
 import streamlit.components.v1 as components
 
-# Optional libs - import safely
+# Optional libs
 _have_pydub = False
 _have_imageio_ffmpeg = False
 _have_librosa = False
@@ -64,16 +54,14 @@ try:
 except Exception:
     webrtcvad = None
 
-# If pydub + imageio_ffmpeg are present, tell pydub where ffmpeg is
+# If pydub + imageio_ffmpeg present, set converter
 if _have_pydub and _have_imageio_ffmpeg:
     try:
         AudioSegment.converter = _iioffmpeg.get_ffmpeg_exe()
     except Exception:
         pass
 
-# ---------------------------------------------------------
-# Query-param compatibility wrappers
-# ---------------------------------------------------------
+# Query param compatibility
 def _get_query_params():
     if hasattr(st, "get_query_params"):
         return st.get_query_params()
@@ -95,9 +83,7 @@ def _set_query_params(params: dict | None = None):
         st.experimental_set_query_params(**params)
 
 
-# ---------------------------------------------------------
-# Low-level RMS (supports 8/16-bit and multi-channel)
-# ---------------------------------------------------------
+# Low-level RMS: supports 8/16-bit and multi-channel
 def calculate_rms(fragment: bytes, sampwidth: int, nchannels: int) -> int:
     if not fragment:
         return 0
@@ -140,18 +126,16 @@ def calculate_rms(fragment: bytes, sampwidth: int, nchannels: int) -> int:
         return int(math.sqrt(mean_square))
 
 
-# ---------------------------------------------------------
-# Helpers: ensure WAV bytes (try pydub conversion)
-# ---------------------------------------------------------
+# Robust WAV conversion: tries direct RIFF, pydub, or ffmpeg subprocess (imageio_ffmpeg or system)
 def _ensure_wav_bytes(raw_bytes: bytes) -> Optional[bytes]:
-    # Quick RIFF/WAVE check
+    # If already RIFF/WAVE return
     try:
         if raw_bytes[:4] == b"RIFF" and b"WAVE" in raw_bytes[:12]:
             return raw_bytes
     except Exception:
         pass
 
-    # Try pydub conversion if available
+    # Try pydub conversion first (pydub uses ffmpeg)
     if _have_pydub:
         try:
             seg = AudioSegment.from_file(io.BytesIO(raw_bytes))
@@ -159,32 +143,49 @@ def _ensure_wav_bytes(raw_bytes: bytes) -> Optional[bytes]:
             seg.export(out, format="wav")
             return out.getvalue()
         except Exception:
+            # fallthrough to ffmpeg subprocess
+            pass
+
+    # Try ffmpeg subprocess: prefer imageio_ffmpeg exe if present, else system ffmpeg
+    ffmpeg_exe = None
+    if _iioffmpeg is not None:
+        try:
+            ffmpeg_exe = _iioffmpeg.get_ffmpeg_exe()
+        except Exception:
+            ffmpeg_exe = None
+    if ffmpeg_exe is None:
+        ffmpeg_exe = shutil.which("ffmpeg")
+
+    if ffmpeg_exe:
+        try:
+            # Use ffmpeg to read from stdin and write wav to stdout
+            # -hide_banner -loglevel error to reduce noise
+            proc = subprocess.run(
+                [ffmpeg_exe, "-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-f", "wav", "pipe:1"],
+                input=raw_bytes,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+            return proc.stdout
+        except Exception:
             return None
+
+    # nothing worked
     return None
 
 
-# ---------------------------------------------------------
-# VAD using webrtcvad (returns speech intervals in seconds)
-# ---------------------------------------------------------
+# webrtcvad-based intervals (if webrtcvad+pydub available)
 def vad_webrtc_intervals(wav_bytes: bytes, target_sample_rate: int = 16000, frame_ms: int = 30) -> List[Tuple[float, float]]:
-    """
-    Convert WAV bytes to 16kHz mono 16-bit PCM and run webrtcvad.
-    Returns list of (start_sec, end_sec).
-    """
-    if not _have_webrtcvad:
+    if not (_have_webrtcvad and _have_pydub):
         return []
-
-    if not _have_pydub:
-        return []
-
     try:
         seg = AudioSegment.from_file(io.BytesIO(wav_bytes))
         seg = seg.set_frame_rate(target_sample_rate).set_channels(1).set_sample_width(2)
         pcm = seg.raw_data
         sample_rate = target_sample_rate
-        vad = webrtcvad.Vad(2)  # aggressiveness 0-3
-
-        bytes_per_frame = int(sample_rate * (frame_ms / 1000.0) * 2)  # 2 bytes per sample
+        vad = webrtcvad.Vad(2)
+        bytes_per_frame = int(sample_rate * (frame_ms / 1000.0) * 2)
         frames = []
         for i in range(0, len(pcm), bytes_per_frame):
             chunk = pcm[i : i + bytes_per_frame]
@@ -192,9 +193,7 @@ def vad_webrtc_intervals(wav_bytes: bytes, target_sample_rate: int = 16000, fram
                 break
             timestamp = i / (sample_rate * 2)
             frames.append((chunk, timestamp))
-
         speech_flags = [vad.is_speech(f[0], sample_rate) for f in frames]
-
         intervals = []
         in_speech = False
         start_time = 0.0
@@ -212,13 +211,133 @@ def vad_webrtc_intervals(wav_bytes: bytes, target_sample_rate: int = 16000, fram
         return []
 
 
-# ---------------------------------------------------------
-# High-level audio analysis (latency detection + word-level heuristics)
-# ---------------------------------------------------------
+# Voice analysis (autocorr + optional librosa/crepe)
+def analyze_voice_data(wav_bytes: bytes) -> Dict:
+    try:
+        wf = wave.open(io.BytesIO(wav_bytes), "rb")
+        nchannels = wf.getnchannels()
+        sampwidth = wf.getsampwidth()
+        framerate = wf.getframerate()
+        nframes = wf.getnframes()
+        raw = wf.readframes(nframes)
+        wf.close()
+
+        if nframes == 0:
+            return {}
+
+        if sampwidth == 2:
+            arr = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        elif sampwidth == 1:
+            arr = (np.frombuffer(raw, dtype=np.uint8).astype(np.int16) - 128).astype(np.float32) / 128.0
+        else:
+            return {}
+
+        if nchannels > 1:
+            try:
+                arr = arr.reshape(-1, nchannels).mean(axis=1)
+            except Exception:
+                pass
+
+        duration = len(arr) / framerate
+
+        frame_len = int(0.03 * framerate)
+        hop_len = int(0.01 * framerate)
+
+        energies = []
+        zcrs = []
+        for s in range(0, max(1, len(arr) - frame_len + 1), hop_len):
+            f = arr[s : s + frame_len]
+            energies.append(float(np.sqrt(np.mean(f * f) + 1e-12)))
+            zcrs.append(float(((f[:-1] * f[1:]) < 0).sum() / max(1, (len(f) - 1))))
+
+        mean_rms = float(np.mean(energies)) if energies else 0.0
+        mean_zcr = float(np.mean(zcrs)) if zcrs else 0.0
+
+        pitches_ac = []
+        for s in range(0, max(1, len(arr) - frame_len + 1), hop_len):
+            f = arr[s : s + frame_len]
+            energy = float(np.sqrt(np.mean(f * f) + 1e-12))
+            if energy < 1e-4:
+                pitches_ac.append(0.0)
+                continue
+            corr = np.correlate(f, f, mode="full")
+            corr = corr[len(corr) // 2 :]
+            if np.max(np.abs(corr)) == 0:
+                pitches_ac.append(0.0)
+                continue
+            corr = corr / (np.max(np.abs(corr)) + 1e-12)
+            lag_min = max(1, int(framerate / 500))
+            lag_max = min(len(corr) - 1, int(framerate / 50))
+            if lag_min >= lag_max:
+                pitches_ac.append(0.0)
+                continue
+            segment = corr[lag_min : lag_max + 1]
+            peak_idx = int(np.argmax(segment)) + lag_min
+            peak_val = corr[peak_idx] if peak_idx < len(corr) else 0.0
+            if peak_val > 0.3:
+                pitch_hz = framerate / peak_idx
+                pitches_ac.append(float(pitch_hz))
+            else:
+                pitches_ac.append(0.0)
+
+        pitches_librosa = []
+        if _have_librosa:
+            try:
+                y = arr.astype(np.float32)
+                try:
+                    f0, _, _ = librosa.pyin(y, fmin=50, fmax=500, sr=framerate, frame_length=frame_len, hop_length=hop_len)
+                    pitches_librosa = [float(p) if not np.isnan(p) else 0.0 for p in f0]
+                except Exception:
+                    f0 = librosa.yin(y, fmin=50, fmax=500, sr=framerate, frame_length=frame_len, hop_length=hop_len)
+                    pitches_librosa = [float(p) if not np.isnan(p) else 0.0 for p in f0]
+            except Exception:
+                pitches_librosa = []
+
+        pitches_crepe = []
+        if _have_crepe:
+            try:
+                audio = arr.astype(np.float32)
+                sr = framerate
+                time, frequency, confidence, activation = crepe.predict(audio, sr, viterbi=True, step_size=10.0, verbose=0)
+                pitches_crepe = [float(f) if not np.isnan(f) else 0.0 for f in frequency]
+            except Exception:
+                pitches_crepe = []
+
+        voiced_ac = [p for p in pitches_ac if p > 0]
+        mean_pitch_ac = float(np.mean(voiced_ac)) if voiced_ac else 0.0
+        voiced_ratio = float(len([p for p in pitches_ac if p > 0]) / max(1, len(pitches_ac))) if pitches_ac else 0.0
+
+        if energies:
+            se = np.sort(np.array(energies))
+            bottom = np.mean(se[: max(1, int(len(se) * 0.1))])
+            top = np.mean(se[-max(1, int(len(se) * 0.1)) :])
+            snr_db = float(10.0 * math.log10((top + 1e-12) / (bottom + 1e-12)))
+        else:
+            snr_db = 0.0
+
+        return {
+            "duration_s": round(duration, 3),
+            "mean_rms": round(mean_rms, 6),
+            "mean_zcr": round(mean_zcr, 6),
+            "voiced_ratio": round(voiced_ratio, 3),
+            "snr_db": round(snr_db, 2),
+            "pitch_ac_mean_hz": round(mean_pitch_ac, 2),
+            "pitch_ac_contour_hz": [round(float(p), 2) for p in pitches_ac],
+            "pitch_librosa_contour_hz": [round(float(p), 2) for p in pitches_librosa] if pitches_librosa else [],
+            "pitch_crepe_contour_hz": [round(float(p), 2) for p in pitches_crepe] if pitches_crepe else [],
+        }
+    except Exception:
+        return {}
+
+
+# High-level audio analysis (latency detection + voice_analysis)
 def analyze_audio_bytes(raw_audio_bytes):
     try:
         wav_bytes = _ensure_wav_bytes(raw_audio_bytes)
         if wav_bytes is None:
+            st.session_state["last_error_msg"] = (
+                "Failed to convert input to WAV. Install ffmpeg and/or pydub (see README)."
+            )
             return "NO_SPEECH"
 
         wav_file = wave.open(io.BytesIO(wav_bytes), "rb")
@@ -229,6 +348,7 @@ def analyze_audio_bytes(raw_audio_bytes):
 
         if nframes == 0 or framerate == 0:
             wav_file.close()
+            st.session_state["last_error_msg"] = "WAV file contains zero frames or zero framerate."
             return "NO_SPEECH"
 
         total_duration = round(nframes / float(framerate), 1)
@@ -252,6 +372,7 @@ def analyze_audio_bytes(raw_audio_bytes):
         wav_file.close()
 
         if not chunk_rms:
+            st.session_state["last_error_msg"] = "No RMS frames extracted (silence or bad format)."
             return "NO_SPEECH"
 
         max_rms = max(chunk_rms) if chunk_rms else 1
@@ -259,14 +380,12 @@ def analyze_audio_bytes(raw_audio_bytes):
             max_rms = 1
         threshold = max(max_rms * 0.02, 5)
 
-        # Try webrtcvad intervals first if available
-        vad_intervals = vad_webrtc_intervals(wav_bytes) if _have_webrtcvad and _have_pydub else []
+        vad_intervals = vad_webrtc_intervals(wav_bytes) if (_have_webrtcvad and _have_pydub) else []
 
         speech_intervals = []
         if vad_intervals:
             speech_intervals = vad_intervals
         else:
-            # fallback RMS-based VAD
             in_speech = False
             start_idx = 0
             for idx, rms in enumerate(chunk_rms):
@@ -328,8 +447,10 @@ def analyze_audio_bytes(raw_audio_bytes):
             if word_latencies else 0.0
         )
 
-        # Add voice-level analyses (librosa/crepe/autocorr)
         voice_analysis = analyze_voice_data(wav_bytes)
+
+        # clear previous error on success
+        st.session_state["last_error_msg"] = ""
 
         return {
             "latency": first_latency,
@@ -340,142 +461,12 @@ def analyze_audio_bytes(raw_audio_bytes):
             "speech_intervals": speech_intervals,
             "voice_analysis": voice_analysis,
         }
-    except Exception:
+    except Exception as e:
+        st.session_state["last_error_msg"] = f"Unexpected error during analysis: {e}"
         return "NO_SPEECH"
 
 
-# ---------------------------------------------------------
-# Voice analysis: combine autocorrelation, librosa (optional), crepe (optional)
-# ---------------------------------------------------------
-def analyze_voice_data(wav_bytes: bytes) -> Dict:
-    try:
-        wf = wave.open(io.BytesIO(wav_bytes), "rb")
-        nchannels = wf.getnchannels()
-        sampwidth = wf.getsampwidth()
-        framerate = wf.getframerate()
-        nframes = wf.getnframes()
-        raw = wf.readframes(nframes)
-        wf.close()
-
-        if nframes == 0:
-            return {}
-
-        # Convert to float32 mono in [-1,1]
-        if sampwidth == 2:
-            arr = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-        elif sampwidth == 1:
-            arr = (np.frombuffer(raw, dtype=np.uint8).astype(np.int16) - 128).astype(np.float32) / 128.0
-        else:
-            return {}
-
-        if nchannels > 1:
-            try:
-                arr = arr.reshape(-1, nchannels).mean(axis=1)
-            except Exception:
-                pass
-
-        duration = len(arr) / framerate
-
-        # Frame settings for simple analysis
-        frame_len = int(0.03 * framerate)  # 30ms
-        hop_len = int(0.01 * framerate)  # 10ms
-
-        # Energies and zcr
-        energies = []
-        zcrs = []
-        for s in range(0, max(1, len(arr) - frame_len + 1), hop_len):
-            f = arr[s : s + frame_len]
-            energies.append(float(np.sqrt(np.mean(f * f) + 1e-12)))
-            zcrs.append(float(((f[:-1] * f[1:]) < 0).sum() / max(1, (len(f) - 1))))
-
-        mean_rms = float(np.mean(energies)) if energies else 0.0
-        mean_zcr = float(np.mean(zcrs)) if zcrs else 0.0
-
-        # Autocorrelation-based pitch contour
-        pitches_ac = []
-        for s in range(0, max(1, len(arr) - frame_len + 1), hop_len):
-            f = arr[s : s + frame_len]
-            energy = float(np.sqrt(np.mean(f * f) + 1e-12))
-            if energy < 1e-4:
-                pitches_ac.append(0.0)
-                continue
-            corr = np.correlate(f, f, mode="full")
-            corr = corr[len(corr) // 2 :]
-            if np.max(np.abs(corr)) == 0:
-                pitches_ac.append(0.0)
-                continue
-            corr = corr / (np.max(np.abs(corr)) + 1e-12)
-            lag_min = max(1, int(framerate / 500))
-            lag_max = min(len(corr) - 1, int(framerate / 50))
-            if lag_min >= lag_max:
-                pitches_ac.append(0.0)
-                continue
-            segment = corr[lag_min : lag_max + 1]
-            peak_idx = int(np.argmax(segment)) + lag_min
-            peak_val = corr[peak_idx] if peak_idx < len(corr) else 0.0
-            if peak_val > 0.3:
-                pitch_hz = framerate / peak_idx
-                pitches_ac.append(float(pitch_hz))
-            else:
-                pitches_ac.append(0.0)
-
-        # Librosa pitch (pyin) if available
-        pitches_librosa = []
-        if _have_librosa:
-            try:
-                y = arr.astype(np.float32)
-                try:
-                    f0, _, _ = librosa.pyin(y, fmin=50, fmax=500, sr=framerate, frame_length=frame_len, hop_length=hop_len)
-                    pitches_librosa = [float(p) if not np.isnan(p) else 0.0 for p in f0]
-                except Exception:
-                    f0 = librosa.yin(y, fmin=50, fmax=500, sr=framerate, frame_length=frame_len, hop_length=hop_len)
-                    pitches_librosa = [float(p) if not np.isnan(p) else 0.0 for p in f0]
-            except Exception:
-                pitches_librosa = []
-
-        # CREPE pitch if available (may be slow/heavy)
-        pitches_crepe = []
-        if _have_crepe:
-            try:
-                audio = arr.astype(np.float32)
-                sr = framerate
-                time, frequency, confidence, activation = crepe.predict(audio, sr, viterbi=True, step_size=10.0, verbose=0)
-                pitches_crepe = [float(f) if not np.isnan(f) else 0.0 for f in frequency]
-            except Exception:
-                pitches_crepe = []
-
-        # voiced stats
-        voiced_ac = [p for p in pitches_ac if p > 0]
-        mean_pitch_ac = float(np.mean(voiced_ac)) if voiced_ac else 0.0
-        voiced_ratio = float(len([p for p in pitches_ac if p > 0]) / max(1, len(pitches_ac))) if pitches_ac else 0.0
-
-        # SNR-like estimate
-        if energies:
-            se = np.sort(np.array(energies))
-            bottom = np.mean(se[: max(1, int(len(se) * 0.1))])
-            top = np.mean(se[-max(1, int(len(se) * 0.1)) :])
-            snr_db = float(10.0 * math.log10((top + 1e-12) / (bottom + 1e-12)))
-        else:
-            snr_db = 0.0
-
-        return {
-            "duration_s": round(duration, 3),
-            "mean_rms": round(mean_rms, 6),
-            "mean_zcr": round(mean_zcr, 6),
-            "voiced_ratio": round(voiced_ratio, 3),
-            "snr_db": round(snr_db, 2),
-            "pitch_ac_mean_hz": round(mean_pitch_ac, 2),
-            "pitch_ac_contour_hz": [round(float(p), 2) for p in pitches_ac],
-            "pitch_librosa_contour_hz": [round(float(p), 2) for p in pitches_librosa] if pitches_librosa else [],
-            "pitch_crepe_contour_hz": [round(float(p), 2) for p in pitches_crepe] if pitches_crepe else [],
-        }
-    except Exception:
-        return {}
-
-
-# ---------------------------------------------------------
-# Streamlit UI (with original title)
-# ---------------------------------------------------------
+# UI (original title)
 st.set_page_config(
     page_title="특허 1호 MVP - 음성 데이터 기반 분석 및 역번역 튜터",
     layout="wide",
@@ -495,10 +486,12 @@ if "recorded_audio_bytes" not in st.session_state:
     st.session_state.recorded_audio_bytes = None
 if "recorder_key" not in st.session_state:
     st.session_state.recorder_key = 0
+if "last_error_msg" not in st.session_state:
+    st.session_state.last_error_msg = ""
 
 sample_text = "The quick brown fox jumps over the lazy dog.\nThe fox is very fast."
 
-# Recorder JS component (sends dataURL via query param - fragile on long audio)
+# Recorder JS (sends dataURL via query param)
 html_recorder = """
 <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; text-align: center; padding: 18px; border: 1px solid #cbd5e1; border-radius: 12px; background: #f8fafc;">
   <div style="margin-bottom:10px;">
@@ -589,8 +582,8 @@ with col1:
             audio_bytes = base64.b64decode(b64)
             st.session_state.recorded_audio_bytes = audio_bytes
             st.session_state.analysis_data = analyze_audio_bytes(audio_bytes)
-        except Exception:
-            pass
+        except Exception as e:
+            st.session_state.last_error_msg = f"Failed to decode rec_b64: {e}"
         _set_query_params()
 
     components.html(html_recorder, height=240)
@@ -623,6 +616,9 @@ with col2:
 
     if st.session_state.analysis_data == "NO_SPEECH":
         st.error("⚠️ 음성 분석 실패: 입력을 WAV로 변환할 수 없거나 음성이 감지되지 않았습니다.")
+        if st.session_state.get("last_error_msg"):
+            st.info("진단 정보: " + st.session_state["last_error_msg"])
+            st.warning("해결: 설치된 ffmpeg가 없으면 설치하거나 requirements.txt에 imageio-ffmpeg+pydub를 추가하세요.")
     elif isinstance(st.session_state.analysis_data, dict):
         data = st.session_state.analysis_data
         colm1, colm2, colm3 = st.columns(3)
@@ -724,7 +720,7 @@ with col2:
                 " 완벽하게 수행했습니다."
             )
 
-        # Show voice analysis if available
+        # Voice analysis display
         va = data.get("voice_analysis", {})
         if va:
             st.markdown("---")
@@ -744,6 +740,5 @@ with col2:
         else:
             st.markdown("---")
             st.info("음성 분석 결과(피치/에너지 등)가 없습니다.")
-
     else:
         st.info("👈 좌측에서 **[🔴 녹음 시작]**을 누르고 지문을 읽은 뒤 **[⏹️ 녹음 정지 및 분석]**을 누르세요.")
