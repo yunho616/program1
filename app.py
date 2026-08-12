@@ -174,7 +174,6 @@ def vad_webrtc_intervals(wav_bytes: bytes, target_sample_rate: int = 16000, fram
     if not _have_webrtcvad:
         return []
 
-    # Use pydub to resample/convert if available
     if not _have_pydub:
         return []
 
@@ -424,12 +423,9 @@ def analyze_voice_data(wav_bytes: bytes) -> Dict:
         pitches_librosa = []
         if _have_librosa:
             try:
-                # librosa expects mono float32
                 y = arr.astype(np.float32)
-                # use pyin if available; fallback to yin
                 try:
                     f0, _, _ = librosa.pyin(y, fmin=50, fmax=500, sr=framerate, frame_length=frame_len, hop_length=hop_len)
-                    # pyin returns array of f0 or nan
                     pitches_librosa = [float(p) if not np.isnan(p) else 0.0 for p in f0]
                 except Exception:
                     f0 = librosa.yin(y, fmin=50, fmax=500, sr=framerate, frame_length=frame_len, hop_length=hop_len)
@@ -441,14 +437,9 @@ def analyze_voice_data(wav_bytes: bytes) -> Dict:
         pitches_crepe = []
         if _have_crepe:
             try:
-                # crepe.predict expects float array in range [-1,1]
-                # Use 10ms step since crepe default is 10ms
                 audio = arr.astype(np.float32)
                 sr = framerate
-                # crepe.predict returns frequency (Hz), confidence... step size in ms
-                # NOTE: using small batch_size to reduce memory pressure
                 time, frequency, confidence, activation = crepe.predict(audio, sr, viterbi=True, step_size=10.0, verbose=0)
-                # frequency is an ndarray; convert to list
                 pitches_crepe = [float(f) if not np.isnan(f) else 0.0 for f in frequency]
             except Exception:
                 pitches_crepe = []
@@ -458,7 +449,7 @@ def analyze_voice_data(wav_bytes: bytes) -> Dict:
         mean_pitch_ac = float(np.mean(voiced_ac)) if voiced_ac else 0.0
         voiced_ratio = float(len([p for p in pitches_ac if p > 0]) / max(1, len(pitches_ac))) if pitches_ac else 0.0
 
-        # SNR-like estimate (top decile vs bottom decile energy)
+        # SNR-like estimate
         if energies:
             se = np.sort(np.array(energies))
             bottom = np.mean(se[: max(1, int(len(se) * 0.1))])
@@ -483,17 +474,19 @@ def analyze_voice_data(wav_bytes: bytes) -> Dict:
 
 
 # ---------------------------------------------------------
-# Streamlit UI
+# Streamlit UI (with original title)
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="특허 1호 MVP - 음성 Latency & Voice Analysis",
+    page_title="특허 1호 MVP - 음성 데이터 기반 분석 및 역번역 튜터",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-st.title("🎙️ Latency + Voice Analysis (librosa / crepe / webrtcvad optionally)")
-st.caption("Optional features enabled: " +
-           f"pydub={_have_pydub}, librosa={_have_librosa}, crepe={_have_crepe}, webrtcvad={_have_webrtcvad}")
+st.title("🎙️ 특허 1호: 음성 Latency 분석 및 자동 역번역 비계(Scaffolding) 튜터")
+st.caption(
+    "녹음 및 반응 지연 시간을 실제 음성 파형(Acoustic Data) 기반으로 분석하여"
+    " 자동 맞춤형 학습 비계를 제공합니다."
+)
 st.markdown("---")
 
 if "analysis_data" not in st.session_state:
@@ -576,11 +569,11 @@ stopBtn.onclick = () => {
 
 col1, col2 = st.columns([1, 1])
 with col1:
-    st.subheader("📖 지문")
+    st.subheader("📖 1단계: 영어 지문 읽기 및 준비")
     st.text_area("오늘의 학습 지문", value=sample_text, height=120, disabled=True)
 
     st.markdown("---")
-    st.subheader("🎙️ 녹음 (브라우저 또는 업로드)")
+    st.subheader("🎙️ 2단계: 음성 녹음")
 
     query_params = _get_query_params()
     if "rec_b64" in query_params:
@@ -602,7 +595,7 @@ with col1:
 
     components.html(html_recorder, height=240)
 
-    with st.expander("📁 업로드 (대체)"):
+    with st.expander("📁 음성 파일 직접 업로드 (대체 테스트)"):
         uploaded_file = st.file_uploader("음성 파일 업로드", type=["wav", "webm", "ogg", "mp3"], key=f"uploader_{st.session_state.recorder_key}")
         if uploaded_file is not None:
             file_bytes = uploaded_file.read()
@@ -611,7 +604,7 @@ with col1:
             st.success("파일 분석 완료")
 
     st.markdown("---")
-    if st.button("🗑️ 초기화", use_container_width=True):
+    if st.button("🗑️ 분석 결과 초기화", use_container_width=True):
         st.session_state.analysis_data = None
         st.session_state.recorded_audio_bytes = None
         st.session_state.recorder_key += 1
@@ -619,14 +612,13 @@ with col1:
         st.experimental_rerun()
 
 with col2:
-    st.subheader("📊 결과")
+    st.subheader("📊 실시간 음성 분석 및 Latency 결과")
 
     if st.session_state.recorded_audio_bytes is not None:
-        st.markdown("##### 🔊 녹음 확인")
+        st.markdown("##### 🔊 녹음된 음성 확인")
         try:
             st.audio(st.session_state.recorded_audio_bytes, format="audio/wav")
         except Exception:
-            # let streamlit try best-effort
             st.audio(st.session_state.recorded_audio_bytes)
 
     if st.session_state.analysis_data == "NO_SPEECH":
@@ -637,73 +629,121 @@ with col2:
         with colm1:
             st.metric("⏱️ 첫 발화 지연", f"{data['latency']} 초")
         with colm2:
-            st.metric("🎙️ 총 길이", f"{data['duration']} 초")
+            st.metric("🎙️ 음성 총 길이", f"{data['duration']} 초")
         with colm3:
-            st.metric("⏸️ 망설임 비율", f"{data['pause_ratio']}%")
+            st.metric("⏸️ 망설임 구간 비율", f"{data['pause_ratio']}%")
 
         st.markdown("---")
-        st.subheader("단어별 Latency")
+        st.subheader("📖 분석 대상 지문 (단어별 Latency 분석)")
+
         words = data.get("word_analysis", [])
-        for w in words:
-            if w["latency"] >= 2.0:
-                label = "🚨 지연"
-            elif w["latency"] >= 1.0:
-                label = "⚠️ 망설임"
-            else:
-                label = "✅ 원활"
-            st.markdown(f"- **{w['word']}**: {w['latency']}s {label}")
+        cols_per_row = 3
+        for i in range(0, len(words), cols_per_row):
+            row_words = words[i : i + cols_per_row]
+            row_cols = st.columns(cols_per_row)
+            for idx, item in enumerate(row_words):
+                with row_cols[idx]:
+                    if item["latency"] >= 2.0:
+                        bg_color = "#fff5f5"
+                        border_color = "#e53e3e"
+                        tag = "🚨 지연 감지"
+                    elif item["latency"] >= 1.0:
+                        bg_color = "#fffaf0"
+                        border_color = "#dd6b20"
+                        tag = "⚠️ 약간 망설임"
+                    else:
+                        bg_color = "#f0fff4"
+                        border_color = "#38a169"
+                        tag = "✅ 원활"
+
+                    st.markdown(
+                        f"""
+                        <div style="background-color: {bg_color}; border: 1.5px solid {border_color}; border-radius: 8px; padding: 12px; text-align: center; margin-bottom: 10px;">
+                            <div style="font-size: 17px; font-weight: bold; color: #2d3748;">{item['word']}</div>
+                            <div style="font-size: 14px; font-weight: bold; color: {border_color}; margin-top: 6px;">Latency: {item['latency']}초</div>
+                            <div style="font-size: 11px; margin-top: 4px; font-weight: 500;">{tag}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
 
         st.markdown("---")
-        st.subheader("음성 분석 상세")
+        st.subheader("💡 자동 생성된 역번역/어원 비계 (Scaffolding)")
 
-        va = data.get("voice_analysis", {})
-        if va:
-            cols = st.columns(4)
-            cols[0].metric("평균 RMS", va.get("mean_rms", 0))
-            cols[1].metric("평균 ZCR", va.get("mean_zcr", 0))
-            cols[2].metric("발화 비율", f"{va.get('voiced_ratio',0)*100:.1f}%")
-            cols[3].metric("SNR (dB)", va.get("snr_db", 0))
+        is_scaffold_needed = (
+            data.get("max_word_latency", 0) >= 2.0 or data.get("pause_ratio", 0) > 25.0
+        )
 
-            st.markdown("피치 (Autocorr) 요약")
-            st.write(f"평균 피치: {va.get('pitch_ac_mean_hz', 0)} Hz")
-            if va.get("pitch_ac_contour_hz"):
-                with st.expander("피치 컨투어 (Autocorr) 보기"):
-                    st.write(va.get("pitch_ac_contour_hz"))
-
-            if va.get("pitch_librosa_contour_hz"):
-                st.markdown("librosa 피치 (pyin/yin)")
-                with st.expander("librosa 피치 보기"):
-                    st.write(va.get("pitch_librosa_contour_hz"))
-
-            if va.get("pitch_crepe_contour_hz"):
-                st.markdown("crepe 피치 (딥러닝)")
-                with st.expander("crepe 피치 보기"):
-                    st.write(va.get("pitch_crepe_contour_hz"))
-        else:
-            st.info("음성 특징 분석 결과가 없습니다 (오류 또는 optional 패키지 미설치).")
-
-        # Show vad intervals if available
-        intervals = data.get("speech_intervals", [])
-        if intervals:
-            st.markdown("---")
-            st.subheader("음성 구간 (VAD)")
-            st.write(intervals)
-
-        # Scaffolding logic (same as before)
-        st.markdown("---")
-        st.subheader("자동 역번역 / 어원 비계")
-        is_scaffold_needed = data.get("max_word_latency", 0) >= 2.0 or data.get("pause_ratio", 0) > 25.0
         if is_scaffold_needed:
             delayed_words = [w for w in words if w["latency"] >= 2.0]
-            if delayed_words:
-                st.error("지연 단어: " + ", ".join([w["word"] for w in delayed_words]))
-            else:
-                st.warning("망설임 비율이 높음 — 전체 구성 힌트 제공")
 
-            st.markdown("**직독직해 힌트 예시**")
-            st.info("빠른 갈색 여우가 ➔ 뛰어넘는다 (jumps) ➔ 게으른 개를. 그 여우는 매우 ➔ 빠릅니다 (fast).")
+            if delayed_words:
+                delayed_word_names = ", ".join([f"'{w['word']}'" for w in delayed_words])
+                st.error(
+                    f"🚨 **지연 발생 단어({delayed_word_names} - 2.0초 이상)** 감지! 자동 역번역 및 어원 비계가 활성화되었습니다."
+                )
+            else:
+                st.warning(
+                    "⚠️ **망설임 구간 비율(25% 초과)** 감지! 전체적인 문장 구성 비계가 활성화되었습니다."
+                )
+
+            st.markdown("### 1. 직독직해 역번역 힌트")
+            st.info(
+                "**[어순 배치 힌트]** 빠른 갈색 여우가 ➔ 뛰어넘는다 (jumps) ➔ 게으른"
+                " 개를. 그 여우는 매우 ➔ 빠릅니다 (fast)."
+            )
+
+            st.markdown("### 2. 지연 단어 어원 심층 분석")
+            if delayed_words:
+                etymology_db = {
+                    "The": "고대 영어 þæt (지시대명사/정관사)",
+                    "quick": "고대 영어 cwic (살아있는, 활발한)",
+                    "brown": "고대 영어 brūn (어두운 색, 갈색)",
+                    "fox": "고대 영어 fox (여우)",
+                    "jumps": "중세 영어 jumpen (갑자기 이동하다, 뛰어오르다)",
+                    "over": "고대 영어 ofer (위쪽에, 건너서)",
+                    "the": "고대 영어 þæt (지시대명사/정관사)",
+                    "lazy": "저지 독일어 lasich (느슨한, 게으른)",
+                    "dog.": "고대 영어 docga (개)",
+                    "is": "고대 영어 is (있다, 이다)",
+                    "very": "고대 프랑스어 verai (진실한, 매우)",
+                    "fast.": "고대 영어 fæst (단단한, 확고한, 빠른)"
+                }
+                etymology_result = {}
+                for item in delayed_words:
+                    word_clean = item["word"]
+                    info = etymology_db.get(word_clean, "어원 정보 등록 중")
+                    key_name = f"{word_clean} (Latency: {item['latency']}초)"
+                    etymology_result[key_name] = info
+                st.json(etymology_result)
+            else:
+                st.write("감지된 개별 지연 단어가 없습니다.")
         else:
-            st.success("🎉 모든 단어가 원활하게 발화되었습니다!")
+            st.success(
+                "🎉 모든 단어의 발화 반응속도가 원활합니다! 힌트 없이"
+                " 완벽하게 수행했습니다."
+            )
+
+        # Show voice analysis if available
+        va = data.get("voice_analysis", {})
+        if va:
+            st.markdown("---")
+            st.subheader("🔬 음성 특징 요약 (Voice Analysis)")
+            cols = st.columns(4)
+            with cols[0]:
+                st.metric("평균 피치 (Autocorr, Hz)", va.get("pitch_ac_mean_hz", 0))
+            with cols[1]:
+                st.metric("음성 SNR (dB)", va.get("snr_db", 0))
+            with cols[2]:
+                st.metric("발화 비율", f"{va.get('voiced_ratio', 0)*100:.1f}%")
+            with cols[3]:
+                st.metric("평균 RMS", va.get("mean_rms", 0))
+
+            with st.expander("피치 컨투어 및 세부값 보기"):
+                st.json(va)
+        else:
+            st.markdown("---")
+            st.info("음성 분석 결과(피치/에너지 등)가 없습니다.")
 
     else:
-        st.info("좌측에서 녹음하거나 파일을 업로드한 뒤 분석 결과가 여기 표시됩니다.")
+        st.info("👈 좌측에서 **[🔴 녹음 시작]**을 누르고 지문을 읽은 뒤 **[⏹️ 녹음 정지 및 분석]**을 누르세요.")
