@@ -1,3 +1,4 @@
+# Full app.py (updated recorder JS with robust navigation + fallback download)
 import base64
 import io
 import math
@@ -490,7 +491,7 @@ if "last_error_msg" not in st.session_state:
 
 sample_text = "The quick brown fox jumps over the lazy dog.\nThe fox is very fast."
 
-# Recorder JS (sends dataURL via query param)
+# Recorder HTML/JS — improved fallback behavior
 html_recorder = """
 <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; text-align: center; padding: 18px; border: 1px solid #cbd5e1; border-radius: 12px; background: #f8fafc;">
   <div style="margin-bottom:10px;">
@@ -498,7 +499,6 @@ html_recorder = """
   </div>
   <div style="display:flex;gap:8px;justify-content:center;">
     <button id="startBtn" style="background:#ef4444;color:white;padding:8px 14px;border-radius:8px;">🔴 녹음 시작</button>
-    <!-- Stop button default color changed to blue; disabled appearance will be handled in JS -->
     <button id="stopBtn" disabled style="background:#2563eb;color:#ffffff;padding:8px 14px;border-radius:8px;cursor:not-allowed;">⏹️ 녹음 정지 및 분석</button>
   </div>
   <div id="status" style="margin-top:10px;color:#64748b;">버튼을 눌러 녹음을 시작해 주세요.</div>
@@ -513,6 +513,20 @@ const startBtn = document.getElementById('startBtn');
 const stopBtn = document.getElementById('stopBtn');
 const timer = document.getElementById('timer');
 const status = document.getElementById('status');
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.style.display = 'none';
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+  }, 1000);
+}
 
 startBtn.onclick = async () => {
   try {
@@ -532,16 +546,45 @@ startBtn.onclick = async () => {
       reader.readAsDataURL(blob);
       reader.onloadend = () => {
         const dataUrl = reader.result;
-        const parentUrl = new URL(window.parent.location.href);
-        parentUrl.searchParams.set('rec_b64', encodeURIComponent(dataUrl));
-        window.parent.location.href = parentUrl.toString();
+        // Build a URL that contains the base64 in a rec_b64 param
+        try {
+          const parentUrl = new URL(window.parent.location.href);
+          parentUrl.searchParams.set('rec_b64', encodeURIComponent(dataUrl));
+          // Try to navigate parent window (may fail-cross origin)
+          try {
+            window.parent.location.href = parentUrl.toString();
+            // if navigation works, we won't execute further fallback code in most browsers
+            return;
+          } catch (err) {
+            // parent navigation failed — try top
+          }
+          try {
+            window.top.location.href = parentUrl.toString();
+            return;
+          } catch (err2) {
+            // top navigation failed — try opening new tab
+          }
+          try {
+            window.open(parentUrl.toString(), '_blank');
+            status.innerText = "새 탭에서 분석을 시도했습니다. 탭을 확인하세요.";
+            return;
+          } catch (err3) {
+            // all navigation attempts failed — fallback to download
+          }
+          // Final fallback: download the recorded file and instruct user to upload it
+          downloadBlob(blob, 'recording.webm');
+          status.innerText = "녹음 파일을 다운로드했습니다. 오른쪽의 '음성 파일 업로드'로 파일을 업로드하세요.";
+        } catch (ex) {
+          // If building parentUrl failed (rare), fallback to download
+          downloadBlob(blob, 'recording.webm');
+          status.innerText = "오류 발생 — 녹음 파일을 다운로드했습니다. 오른쪽의 '음성 파일 업로드'로 파일을 업로드하세요.";
+        }
       };
-      // reset stop button to disabled look
+      // reset UI
       stopBtn.disabled = true;
       stopBtn.style.background = "#cbd5e1";
       stopBtn.style.color = "#94a3b8";
       stopBtn.style.cursor = "not-allowed";
-      // reset start button UI
       startBtn.disabled = false;
       startBtn.style.background = "#ef4444";
       startBtn.style.color = "#ffffff";
@@ -679,13 +722,13 @@ with col2:
                         tag = "✅ 원활"
 
                     st.markdown(
-                        f"""
+                        f'''
                         <div style="background-color: {bg_color}; border: 1.5px solid {border_color}; border-radius: 8px; padding: 12px; text-align: center; margin-bottom: 10px;">
                             <div style="font-size: 17px; font-weight: bold; color: #2d3748;">{item['word']}</div>
                             <div style="font-size: 14px; font-weight: bold; color: {border_color}; margin-top: 6px;">Latency: {item['latency']}초</div>
                             <div style="font-size: 11px; margin-top: 4px; font-weight: 500;">{tag}</div>
                         </div>
-                        """,
+                        ''',
                         unsafe_allow_html=True,
                     )
 
