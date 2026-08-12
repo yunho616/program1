@@ -3,28 +3,65 @@ import io
 import math
 import struct
 import wave
-import numpy as np
 import streamlit as st
 import streamlit.components.v1 as components
 
-
 # ---------------------------------------------------------
-# [Pure Python] 음량(RMS) 분석 함수
+# [Pure Python] 음량(RMS) 분석 함수 - supports sampwidth=1 or 2 and multi-channel
 # ---------------------------------------------------------
-def calculate_rms(fragment, width):
+def calculate_rms(fragment: bytes, sampwidth: int, nchannels: int) -> int:
+    """
+    fragment: raw PCM bytes (may contain multiple interleaved channels)
+    sampwidth: bytes per sample (1 or 2)
+    nchannels: number of channels (1,2,...)
+    Returns RMS as int (0 if no samples)
+    """
     if not fragment:
         return 0
-    count = len(fragment) // width
-    if count == 0:
+
+    sample_count = len(fragment) // sampwidth
+    if sample_count == 0:
         return 0
 
-    format_str = f"<{count}{'h' if width == 2 else 'b'}"
-    try:
-        samples = struct.unpack(format_str, fragment[: count * width])
-        sum_squares = sum(s * s for s in samples)
-        return int(math.sqrt(sum_squares / count))
-    except Exception:
+    # Unpack samples as signed 16-bit or unsigned 8-bit as WAV defines
+    if sampwidth == 2:
+        fmt = f"<{sample_count}h"
+        try:
+            samples = struct.unpack(fmt, fragment[: sample_count * sampwidth])
+        except struct.error:
+            return 0
+    elif sampwidth == 1:
+        fmt = f"<{sample_count}B"
+        try:
+            usamples = struct.unpack(fmt, fragment[: sample_count * sampwidth])
+        except struct.error:
+            return 0
+        # convert unsigned 8-bit (0..255) to signed centered at 0
+        samples = tuple((s - 128) for s in usamples)
+    else:
+        # unsupported sample width
         return 0
+
+    # If multiple channels, compute per-frame averaged sample then RMS across frames.
+    if nchannels > 1:
+        frames = sample_count // nchannels
+        if frames == 0:
+            return 0
+        sum_squares = 0.0
+        for i in range(frames):
+            # average across channels for this frame
+            acc = 0.0
+            for ch in range(nchannels):
+                acc += samples[i * nchannels + ch]
+            avg = acc / nchannels
+            sum_squares += (avg * avg)
+        mean_square = sum_squares / frames
+        return int(math.sqrt(mean_square))
+    else:
+        # single channel
+        sum_squares = sum((s * s) for s in samples)
+        mean_square = sum_squares / sample_count
+        return int(math.sqrt(mean_square))
 
 
 # ---------------------------------------------------------
@@ -82,15 +119,43 @@ etymology_db = {
 # ---------------------------------------------------------
 # 3. WAV 분석 함수
 # ---------------------------------------------------------
+def _ensure_wav_bytes(raw_bytes: bytes) -> bytes | None:
+    """
+    If raw_bytes already looks like a WAV RIFF, return it.
+    Otherwise, try to convert with pydub (requires ffmpeg). If conversion fails, return None.
+    """
+    try:
+        if raw_bytes[:4] == b"RIFF" and b"WAVE" in raw_bytes[:12]:
+            return raw_bytes
+    except Exception:
+        pass
+
+    # Try to convert using pydub (ffmpeg required)
+    try:
+        from pydub import AudioSegment  # optional dependency
+        seg = AudioSegment.from_file(io.BytesIO(raw_bytes))
+        out = io.BytesIO()
+        seg.export(out, format="wav")
+        return out.getvalue()
+    except Exception:
+        return None
+
+
 def analyze_audio_bytes(raw_audio_bytes):
     try:
-        wav_file = wave.open(io.BytesIO(raw_audio_bytes), "rb")
+        wav_bytes = _ensure_wav_bytes(raw_audio_bytes)
+        if wav_bytes is None:
+            # couldn't interpret input as WAV or convert it
+            return "NO_SPEECH"
+
+        wav_file = wave.open(io.BytesIO(wav_bytes), "rb")
         nchannels = wav_file.getnchannels()
         sampwidth = wav_file.getsampwidth()
         framerate = wav_file.getframerate()
         nframes = wav_file.getnframes()
 
         if nframes == 0 or framerate == 0:
+            wav_file.close()
             return "NO_SPEECH"
 
         total_duration = round(nframes / float(framerate), 1)
@@ -99,11 +164,19 @@ def analyze_audio_bytes(raw_audio_bytes):
         frame_size = int(framerate * frame_duration)
 
         chunk_rms = []
-        for _ in range(0, nframes, frame_size):
-            frames = wav_file.readframes(frame_size)
-            if len(frames) < frame_size * sampwidth * nchannels:
+
+        # Read frames in a loop; process partial/short final frames as well.
+        wav_file.rewind()
+        while True:
+            raw_frames = wav_file.readframes(frame_size)
+            if not raw_frames:
                 break
-            rms = calculate_rms(frames, sampwidth)
+            # how many complete samples are present
+            available_frames = len(raw_frames) // (sampwidth * nchannels)
+            if available_frames <= 0:
+                continue
+            bytes_to_use = available_frames * sampwidth * nchannels
+            rms = calculate_rms(raw_frames[:bytes_to_use], sampwidth, nchannels)
             chunk_rms.append(rms)
 
         wav_file.close()
@@ -111,13 +184,15 @@ def analyze_audio_bytes(raw_audio_bytes):
         if not chunk_rms:
             return "NO_SPEECH"
 
-        max_rms = max(chunk_rms) if max(chunk_rms) > 0 else 1
+        max_rms = max(chunk_rms) if chunk_rms else 1
+        if max_rms <= 0:
+            max_rms = 1
         threshold = max(max_rms * 0.02, 5)
 
+        # Simple VAD using RMS threshold -> collect intervals
         speech_intervals = []
         in_speech = False
         start_idx = 0
-
         for idx, rms in enumerate(chunk_rms):
             if rms >= threshold and not in_speech:
                 in_speech = True
@@ -134,6 +209,7 @@ def analyze_audio_bytes(raw_audio_bytes):
             )
 
         if not speech_intervals:
+            # fallback: consider a short utterance at start
             speech_intervals = [(0.1, max(total_duration, 0.5))]
 
         first_latency = round(speech_intervals[0][0], 2)
@@ -180,6 +256,7 @@ def analyze_audio_bytes(raw_audio_bytes):
             "max_word_latency": max_word_latency,
         }
     except Exception:
+        # Keep UI-compatible return value, but swallow unexpected exceptions here.
         return "NO_SPEECH"
 
 
@@ -199,18 +276,28 @@ with col1:
     st.subheader("🎙️ 2단계: 음성 녹음")
 
     # URL query_params를 통한 녹음 데이터 수신 및 URL 자동 정리
-    query_params = st.query_params
+    query_params = st.experimental_get_query_params()
     if "rec_b64" in query_params:
         try:
-            raw_b64 = query_params["rec_b64"]
-            audio_bytes = base64.b64decode(raw_b64)
+            raw_b64 = query_params["rec_b64"][0]
+            # raw_b64 might be a data URL or plain base64; handle both
+            if raw_b64.startswith("data:"):
+                # data:[<mediatype>][;base64],<data>
+                header, b64 = raw_b64.split(",", 1)
+            else:
+                b64 = raw_b64
+            audio_bytes = base64.b64decode(b64)
             st.session_state.recorded_audio_bytes = audio_bytes
             st.session_state.analysis_data = analyze_audio_bytes(audio_bytes)
         except Exception:
+            # ignore and continue (analysis_data stays None or previous)
             pass
-        st.query_params.clear()
+        # clear query params (use experimental_set_query_params)
+        st.experimental_set_query_params()
 
     # HTML/JS 커스텀 녹음 컴포넌트 (0.1초 타이머 + 시작/정지 버튼)
+    # NOTE: Sending raw audio via URL is fragile for larger recordings.
+    # Prefer the file_uploader fallback or a server-side POST endpoint for production.
     html_recorder = """
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; text-align: center; padding: 18px; border: 1px solid #cbd5e1; border-radius: 12px; background: #f8fafc; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
         
@@ -274,9 +361,10 @@ with col1:
                 const reader = new FileReader();
                 reader.readAsDataURL(audioBlob);
                 reader.onloadend = () => {
-                    const base64Audio = reader.result.split(',')[1];
+                    // send the entire data URL (includes MIME) so server can detect type
+                    const dataUrl = reader.result;
                     const parentUrl = new URL(window.parent.location.href);
-                    parentUrl.searchParams.set('rec_b64', base64Audio);
+                    parentUrl.searchParams.set('rec_b64', encodeURIComponent(dataUrl));
                     window.parent.location.href = parentUrl.toString();
                 };
             };
@@ -323,12 +411,12 @@ with col1:
     </script>
     """
 
-    components.html(html_recorder, height=180)
+    components.html(html_recorder, height=200)
 
     with st.expander("📁 음성 파일 직접 업로드 (대체 테스트)"):
         uploaded_file = st.file_uploader(
             "WAV 음성 파일 직접 업로드",
-            type=["wav"],
+            type=["wav", "webm", "ogg", "mp3"],
             key=f"file_uploader_{st.session_state.recorder_key}",
         )
         if uploaded_file is not None:
@@ -342,7 +430,7 @@ with col1:
         st.session_state.analysis_data = None
         st.session_state.recorded_audio_bytes = None
         st.session_state.recorder_key += 1
-        st.query_params.clear()
+        st.experimental_set_query_params()
         st.rerun()
 
 # [오른쪽 칼럼]
@@ -351,6 +439,8 @@ with col2:
 
     if st.session_state.recorded_audio_bytes is not None:
         st.markdown("##### 🔊 녹음된 음성 확인")
+        # Note: streamlit audio playback will try its best; if we converted to WAV bytes above,
+        # those bytes are playable via st.audio
         st.audio(st.session_state.recorded_audio_bytes, format="audio/wav")
         st.markdown("---")
 
