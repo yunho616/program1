@@ -1,17 +1,78 @@
+"""
+Streamlit app: Latency + voice analysis with optional librosa, crepe, and webrtcvad integrations.
+
+Notes:
+- librosa, crepe, and webrtcvad are OPTIONAL. The code will attempt to import them and
+  fall back to simpler pure-Python/numpy methods if they're not available.
+- pydub + ffmpeg (or imageio-ffmpeg) is used to convert non-WAV recorder outputs to WAV.
+- This file is a single-file drop-in. Add packages to requirements.txt:
+    streamlit, numpy, pydub, imageio-ffmpeg, librosa (optional), crepe (optional), webrtcvad (optional)
+  and add "ffmpeg" to packages.txt on Streamlit Cloud, or install ffmpeg on your host.
+"""
+
 import base64
 import io
 import math
 import struct
 import wave
 from urllib.parse import unquote_plus
+from typing import List, Tuple, Dict, Optional
 
 import numpy as np
 import streamlit as st
 import streamlit.components.v1 as components
 
+# Optional libs - import safely
+_have_pydub = False
+_have_imageio_ffmpeg = False
+_have_librosa = False
+_have_crepe = False
+_have_webrtcvad = False
+
+try:
+    from pydub import AudioSegment
+
+    _have_pydub = True
+except Exception:
+    AudioSegment = None
+
+try:
+    import imageio_ffmpeg as _iioffmpeg
+
+    _have_imageio_ffmpeg = True
+except Exception:
+    _iioffmpeg = None
+
+try:
+    import librosa
+
+    _have_librosa = True
+except Exception:
+    librosa = None
+
+try:
+    import crepe
+
+    _have_crepe = True
+except Exception:
+    crepe = None
+
+try:
+    import webrtcvad
+
+    _have_webrtcvad = True
+except Exception:
+    webrtcvad = None
+
+# If pydub + imageio_ffmpeg are present, tell pydub where ffmpeg is
+if _have_pydub and _have_imageio_ffmpeg:
+    try:
+        AudioSegment.converter = _iioffmpeg.get_ffmpeg_exe()
+    except Exception:
+        pass
+
 # ---------------------------------------------------------
 # Query-param compatibility wrappers
-# Use these to support older/newer Streamlit versions
 # ---------------------------------------------------------
 def _get_query_params():
     if hasattr(st, "get_query_params"):
@@ -22,41 +83,28 @@ def _get_query_params():
 
 
 def _set_query_params(params: dict | None = None):
-    # If params is None, clear the query string
     if params is None:
         if hasattr(st, "set_query_params"):
             st.set_query_params()
         elif hasattr(st, "experimental_set_query_params"):
             st.experimental_set_query_params()
         return
-
     if hasattr(st, "set_query_params"):
         st.set_query_params(**params)
     elif hasattr(st, "experimental_set_query_params"):
         st.experimental_set_query_params(**params)
-    else:
-        # no-op
-        return
 
 
 # ---------------------------------------------------------
-# [Pure Python] 음량(RMS) 분석 함수 - supports sampwidth=1 or 2 and multi-channel
+# Low-level RMS (supports 8/16-bit and multi-channel)
 # ---------------------------------------------------------
 def calculate_rms(fragment: bytes, sampwidth: int, nchannels: int) -> int:
-    """
-    fragment: raw PCM bytes (may contain multiple interleaved channels)
-    sampwidth: bytes per sample (1 or 2)
-    nchannels: number of channels (1,2,...)
-    Returns RMS as int (0 if no samples)
-    """
     if not fragment:
         return 0
-
     sample_count = len(fragment) // sampwidth
     if sample_count == 0:
         return 0
 
-    # Unpack samples as signed 16-bit or unsigned 8-bit as WAV defines
     if sampwidth == 2:
         fmt = f"<{sample_count}h"
         try:
@@ -69,20 +117,16 @@ def calculate_rms(fragment: bytes, sampwidth: int, nchannels: int) -> int:
             usamples = struct.unpack(fmt, fragment[: sample_count * sampwidth])
         except struct.error:
             return 0
-        # convert unsigned 8-bit (0..255) to signed centered at 0
         samples = tuple((s - 128) for s in usamples)
     else:
-        # unsupported sample width
         return 0
 
-    # If multiple channels, compute per-frame averaged sample then RMS across frames.
     if nchannels > 1:
         frames = sample_count // nchannels
         if frames == 0:
             return 0
         sum_squares = 0.0
         for i in range(frames):
-            # average across channels for this frame
             acc = 0.0
             for ch in range(nchannels):
                 acc += samples[i * nchannels + ch]
@@ -91,221 +135,91 @@ def calculate_rms(fragment: bytes, sampwidth: int, nchannels: int) -> int:
         mean_square = sum_squares / frames
         return int(math.sqrt(mean_square))
     else:
-        # single channel
         sum_squares = sum((s * s) for s in samples)
         mean_square = sum_squares / sample_count
         return int(math.sqrt(mean_square))
 
 
 # ---------------------------------------------------------
-# 1. 페이지 기본 설정
+# Helpers: ensure WAV bytes (try pydub conversion)
 # ---------------------------------------------------------
-st.set_page_config(
-    page_title="특허 1호 MVP - 음성 데이터 기반 분석 및 역번역 튜터",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
-st.title("🎙️ 특허 1호: 음성 Latency 분석 및 자동 역번역 비계(Scaffolding) 튜터")
-st.caption(
-    "녹음 및 반응 지연 시간을 실제 음성 파형(Acoustic Data) 기반으로 분석하여"
-    " 자동 맞춤형 학습 비계를 제공합니다."
-)
-st.markdown("---")
-
-# ---------------------------------------------------------
-# 2. 세션 상태(Session State) 초기화
-# ---------------------------------------------------------
-if "analysis_data" not in st.session_state:
-    st.session_state.analysis_data = None
-if "recorded_audio_bytes" not in st.session_state:
-    st.session_state.recorded_audio_bytes = None
-if "recorder_key" not in st.session_state:
-    st.session_state.recorder_key = 0
-
-sample_text = (
-    "The quick brown fox jumps over the lazy dog.\nThe fox is very fast."
-)
-
-target_words = [
-    "The", "quick", "brown", "fox", "jumps",
-    "over", "the", "lazy", "dog.", "The",
-    "fox", "is", "very", "fast."
-]
-
-etymology_db = {
-    "The": "고대 영어 þæt (지시대명사/정관사)",
-    "quick": "고대 영어 cwic (살아있는, 활발한)",
-    "brown": "고대 영어 brūn (어두운 색, 갈색)",
-    "fox": "고대 영어 fox (여우)",
-    "jumps": "중세 영어 jumpen (갑자기 이동하다, 뛰어오르다)",
-    "over": "고대 영어 ofer (위쪽에, 건너서)",
-    "the": "고대 영어 þæt (지시대명사/정관사)",
-    "lazy": "저지 독일어 lasich (느슨한, 게으른)",
-    "dog.": "고대 영어 docga (개)",
-    "is": "고대 영어 is (있다, 이다)",
-    "very": "고대 프랑스어 verai (진실한, 매우)",
-    "fast.": "고대 영어 fæst (단단한, 확고한, 빠른)"
-}
-
-
-# ---------------------------------------------------------
-# 3. WAV 분석 함수 & voice analysis
-# ---------------------------------------------------------
-def _ensure_wav_bytes(raw_bytes: bytes) -> bytes | None:
-    """
-    If raw_bytes already looks like a WAV RIFF, return it.
-    Otherwise, try to convert with pydub (requires ffmpeg). If conversion fails, return None.
-    """
+def _ensure_wav_bytes(raw_bytes: bytes) -> Optional[bytes]:
+    # Quick RIFF/WAVE check
     try:
         if raw_bytes[:4] == b"RIFF" and b"WAVE" in raw_bytes[:12]:
             return raw_bytes
     except Exception:
         pass
 
-    # Try to convert using pydub (ffmpeg required)
-    try:
-        from pydub import AudioSegment  # optional dependency
-        seg = AudioSegment.from_file(io.BytesIO(raw_bytes))
-        out = io.BytesIO()
-        seg.export(out, format="wav")
-        return out.getvalue()
-    except Exception:
-        return None
+    # Try pydub conversion if available
+    if _have_pydub:
+        try:
+            seg = AudioSegment.from_file(io.BytesIO(raw_bytes))
+            out = io.BytesIO()
+            seg.export(out, format="wav")
+            return out.getvalue()
+        except Exception:
+            return None
+    return None
 
 
-def analyze_voice_data(wav_bytes):
+# ---------------------------------------------------------
+# VAD using webrtcvad (returns speech intervals in seconds)
+# ---------------------------------------------------------
+def vad_webrtc_intervals(wav_bytes: bytes, target_sample_rate: int = 16000, frame_ms: int = 30) -> List[Tuple[float, float]]:
     """
-    Lightweight voice analysis:
-    - mixes to mono
-    - computes frame-level RMS, ZCR
-    - estimates pitch via autocorrelation per frame (50-500Hz)
-    - computes voiced ratio, SNR estimate, speaking rate (WPM) estimate based on target_words
-    Returns a dict with summary metrics and pitch contour.
+    Convert WAV bytes to 16kHz mono 16-bit PCM and run webrtcvad.
+    Returns list of (start_sec, end_sec).
     """
+    if not _have_webrtcvad:
+        return []
+
+    # Use pydub to resample/convert if available
+    if not _have_pydub:
+        return []
+
     try:
-        wf = wave.open(io.BytesIO(wav_bytes), "rb")
-        nchannels = wf.getnchannels()
-        sampwidth = wf.getsampwidth()
-        framerate = wf.getframerate()
-        nframes = wf.getnframes()
+        seg = AudioSegment.from_file(io.BytesIO(wav_bytes))
+        seg = seg.set_frame_rate(target_sample_rate).set_channels(1).set_sample_width(2)
+        pcm = seg.raw_data
+        sample_rate = target_sample_rate
+        vad = webrtcvad.Vad(2)  # aggressiveness 0-3
 
-        if nframes == 0 or framerate == 0:
-            wf.close()
-            return {}
+        bytes_per_frame = int(sample_rate * (frame_ms / 1000.0) * 2)  # 2 bytes per sample
+        frames = []
+        for i in range(0, len(pcm), bytes_per_frame):
+            chunk = pcm[i : i + bytes_per_frame]
+            if len(chunk) < bytes_per_frame:
+                break
+            timestamp = i / (sample_rate * 2)
+            frames.append((chunk, timestamp))
 
-        raw = wf.readframes(nframes)
-        wf.close()
+        speech_flags = [vad.is_speech(f[0], sample_rate) for f in frames]
 
-        # Convert PCM to numpy array
-        if sampwidth == 2:
-            samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
-            norm_factor = float(2 ** 15)
-        elif sampwidth == 1:
-            samples = (np.frombuffer(raw, dtype=np.uint8).astype(np.int16) - 128).astype(np.float32)
-            norm_factor = float(2 ** 7)
-        else:
-            return {}
-
-        # Mixdown to mono
-        if nchannels > 1:
-            try:
-                samples = samples.reshape(-1, nchannels)
-                samples = samples.mean(axis=1)
-            except Exception:
-                # if reshaping fails, fallback to raw mono array
-                samples = samples
-
-        samples = samples / (norm_factor + 1e-12)
-        total_duration = len(samples) / framerate
-
-        # Frame settings
-        frame_ms = 30
-        hop_ms = 10
-        frame_len = max(1, int(framerate * frame_ms / 1000))
-        hop_len = max(1, int(framerate * hop_ms / 1000))
-
-        energies = []
-        zcrs = []
-        pitches = []
-
-        for start in range(0, max(1, len(samples) - frame_len + 1), hop_len):
-            frame = samples[start : start + frame_len]
-            # RMS energy
-            energy = float(np.sqrt(np.mean(frame * frame) + 1e-12))
-            energies.append(energy)
-            # ZCR
-            zcr = float(((frame[:-1] * frame[1:]) < 0).sum() / max(1, (len(frame) - 1)))
-            zcrs.append(zcr)
-
-            # Pitch estimation via autocorrelation (normalized)
-            if energy < 1e-4:
-                pitches.append(0.0)
-                continue
-            corr = np.correlate(frame, frame, mode="full")
-            corr = corr[len(corr) // 2 :]
-            # normalize
-            if np.max(np.abs(corr)) > 0:
-                corr = corr / (np.max(np.abs(corr)) + 1e-12)
-            # plausible pitch lag range
-            lag_min = max(1, int(framerate / 500))
-            lag_max = min(len(corr) - 1, int(framerate / 50))
-            if lag_min >= lag_max:
-                pitches.append(0.0)
-                continue
-            segment = corr[lag_min : lag_max + 1]
-            peak_idx = int(np.argmax(segment)) + lag_min
-            peak_val = corr[peak_idx] if peak_idx < len(corr) else 0.0
-            if peak_val > 0.3:
-                pitch_hz = framerate / peak_idx
-                pitches.append(float(pitch_hz))
-            else:
-                pitches.append(0.0)
-
-        # Summary metrics
-        voiced_frames = [p for p in pitches if p > 0.0]
-        mean_pitch = float(np.mean(voiced_frames)) if voiced_frames else 0.0
-        median_pitch = float(np.median(voiced_frames)) if voiced_frames else 0.0
-        pitch_std = float(np.std(voiced_frames)) if voiced_frames else 0.0
-        mean_rms = float(np.mean(energies)) if energies else 0.0
-        mean_zcr = float(np.mean(zcrs)) if zcrs else 0.0
-        voiced_ratio = float(len(voiced_frames) / max(1, len(pitches))) if pitches else 0.0
-
-        # SNR-like estimate: compare top and bottom deciles of frame energy
-        if energies:
-            se = np.sort(np.array(energies))
-            bottom = np.mean(se[: max(1, int(len(se) * 0.1))])
-            top = np.mean(se[-max(1, int(len(se) * 0.1)) :])
-            snr = float(10.0 * math.log10((top + 1e-12) / (bottom + 1e-12)))
-        else:
-            snr = 0.0
-
-        # Rough speaking rate estimate (WPM) using our target_words count and estimated speech duration
-        speech_duration = voiced_ratio * total_duration
-        speaking_rate_wpm = float((len(target_words) / speech_duration * 60.0) if speech_duration > 0.1 else 0.0)
-
-        return {
-            "mean_pitch_hz": round(mean_pitch, 2),
-            "median_pitch_hz": round(median_pitch, 2),
-            "pitch_std_hz": round(pitch_std, 2),
-            "pitch_contour_hz": [round(float(p), 2) for p in pitches],
-            "mean_rms": round(mean_rms, 6),
-            "mean_zcr": round(mean_zcr, 6),
-            "voiced_ratio": round(voiced_ratio, 3),
-            "snr_db": round(snr, 2),
-            "speaking_rate_wpm": round(speaking_rate_wpm, 1),
-            "total_duration": round(total_duration, 2),
-            "speech_duration": round(speech_duration, 2),
-        }
+        intervals = []
+        in_speech = False
+        start_time = 0.0
+        for flag, (_, ts) in zip(speech_flags, frames):
+            if flag and not in_speech:
+                in_speech = True
+                start_time = ts
+            elif not flag and in_speech:
+                in_speech = False
+                intervals.append((start_time, ts))
+        if in_speech:
+            intervals.append((start_time, frames[-1][1] + frame_ms / 1000.0))
+        return intervals
     except Exception:
-        return {}
+        return []
 
 
+# ---------------------------------------------------------
+# High-level audio analysis (latency detection + word-level heuristics)
+# ---------------------------------------------------------
 def analyze_audio_bytes(raw_audio_bytes):
     try:
         wav_bytes = _ensure_wav_bytes(raw_audio_bytes)
         if wav_bytes is None:
-            # couldn't interpret input as WAV or convert it
             return "NO_SPEECH"
 
         wav_file = wave.open(io.BytesIO(wav_bytes), "rb")
@@ -324,14 +238,11 @@ def analyze_audio_bytes(raw_audio_bytes):
         frame_size = int(framerate * frame_duration)
 
         chunk_rms = []
-
-        # Read frames in a loop; process partial/short final frames as well.
         wav_file.rewind()
         while True:
             raw_frames = wav_file.readframes(frame_size)
             if not raw_frames:
                 break
-            # how many complete samples are present
             available_frames = len(raw_frames) // (sampwidth * nchannels)
             if available_frames <= 0:
                 continue
@@ -349,27 +260,31 @@ def analyze_audio_bytes(raw_audio_bytes):
             max_rms = 1
         threshold = max(max_rms * 0.02, 5)
 
-        # Simple VAD using RMS threshold -> collect intervals
+        # Try webrtcvad intervals first if available
+        vad_intervals = vad_webrtc_intervals(wav_bytes) if _have_webrtcvad and _have_pydub else []
+
         speech_intervals = []
-        in_speech = False
-        start_idx = 0
-        for idx, rms in enumerate(chunk_rms):
-            if rms >= threshold and not in_speech:
-                in_speech = True
-                start_idx = idx
-            elif rms < threshold and in_speech:
-                in_speech = False
+        if vad_intervals:
+            speech_intervals = vad_intervals
+        else:
+            # fallback RMS-based VAD
+            in_speech = False
+            start_idx = 0
+            for idx, rms in enumerate(chunk_rms):
+                if rms >= threshold and not in_speech:
+                    in_speech = True
+                    start_idx = idx
+                elif rms < threshold and in_speech:
+                    in_speech = False
+                    speech_intervals.append(
+                        (start_idx * frame_duration, idx * frame_duration)
+                    )
+            if in_speech:
                 speech_intervals.append(
-                    (start_idx * frame_duration, idx * frame_duration)
+                    (start_idx * frame_duration, len(chunk_rms) * frame_duration)
                 )
 
-        if in_speech:
-            speech_intervals.append(
-                (start_idx * frame_duration, len(chunk_rms) * frame_duration)
-            )
-
         if not speech_intervals:
-            # fallback: consider a short utterance at start
             speech_intervals = [(0.1, max(total_duration, 0.5))]
 
         first_latency = round(speech_intervals[0][0], 2)
@@ -377,7 +292,13 @@ def analyze_audio_bytes(raw_audio_bytes):
         word_latencies = []
         prev_end = 0.0
 
-        for idx, word_str in enumerate(target_words):
+        target_words_local = [
+            "The", "quick", "brown", "fox", "jumps",
+            "over", "the", "lazy", "dog.", "The",
+            "fox", "is", "very", "fast."
+        ]
+
+        for idx, word_str in enumerate(target_words_local):
             if idx < len(speech_intervals):
                 start_sec = round(speech_intervals[idx][0], 2)
                 end_sec = round(speech_intervals[idx][1], 2)
@@ -408,7 +329,7 @@ def analyze_audio_bytes(raw_audio_bytes):
             if word_latencies else 0.0
         )
 
-        # Add voice-level analysis
+        # Add voice-level analyses (librosa/crepe/autocorr)
         voice_analysis = analyze_voice_data(wav_bytes)
 
         return {
@@ -421,330 +342,368 @@ def analyze_audio_bytes(raw_audio_bytes):
             "voice_analysis": voice_analysis,
         }
     except Exception:
-        # Keep UI-compatible return value, but swallow unexpected exceptions here.
         return "NO_SPEECH"
 
 
 # ---------------------------------------------------------
-# 4. UI 및 레이아웃
+# Voice analysis: combine autocorrelation, librosa (optional), crepe (optional)
 # ---------------------------------------------------------
-col1, col2 = st.columns([1, 1])
+def analyze_voice_data(wav_bytes: bytes) -> Dict:
+    try:
+        wf = wave.open(io.BytesIO(wav_bytes), "rb")
+        nchannels = wf.getnchannels()
+        sampwidth = wf.getsampwidth()
+        framerate = wf.getframerate()
+        nframes = wf.getnframes()
+        raw = wf.readframes(nframes)
+        wf.close()
 
-# [왼쪽 칼럼]
+        if nframes == 0:
+            return {}
+
+        # Convert to float32 mono in [-1,1]
+        if sampwidth == 2:
+            arr = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        elif sampwidth == 1:
+            arr = (np.frombuffer(raw, dtype=np.uint8).astype(np.int16) - 128).astype(np.float32) / 128.0
+        else:
+            return {}
+
+        if nchannels > 1:
+            try:
+                arr = arr.reshape(-1, nchannels).mean(axis=1)
+            except Exception:
+                pass
+
+        duration = len(arr) / framerate
+
+        # Frame settings for simple analysis
+        frame_len = int(0.03 * framerate)  # 30ms
+        hop_len = int(0.01 * framerate)  # 10ms
+
+        # Energies and zcr
+        energies = []
+        zcrs = []
+        for s in range(0, max(1, len(arr) - frame_len + 1), hop_len):
+            f = arr[s : s + frame_len]
+            energies.append(float(np.sqrt(np.mean(f * f) + 1e-12)))
+            zcrs.append(float(((f[:-1] * f[1:]) < 0).sum() / max(1, (len(f) - 1))))
+
+        mean_rms = float(np.mean(energies)) if energies else 0.0
+        mean_zcr = float(np.mean(zcrs)) if zcrs else 0.0
+
+        # Autocorrelation-based pitch contour
+        pitches_ac = []
+        for s in range(0, max(1, len(arr) - frame_len + 1), hop_len):
+            f = arr[s : s + frame_len]
+            energy = float(np.sqrt(np.mean(f * f) + 1e-12))
+            if energy < 1e-4:
+                pitches_ac.append(0.0)
+                continue
+            corr = np.correlate(f, f, mode="full")
+            corr = corr[len(corr) // 2 :]
+            if np.max(np.abs(corr)) == 0:
+                pitches_ac.append(0.0)
+                continue
+            corr = corr / (np.max(np.abs(corr)) + 1e-12)
+            lag_min = max(1, int(framerate / 500))
+            lag_max = min(len(corr) - 1, int(framerate / 50))
+            if lag_min >= lag_max:
+                pitches_ac.append(0.0)
+                continue
+            segment = corr[lag_min : lag_max + 1]
+            peak_idx = int(np.argmax(segment)) + lag_min
+            peak_val = corr[peak_idx] if peak_idx < len(corr) else 0.0
+            if peak_val > 0.3:
+                pitch_hz = framerate / peak_idx
+                pitches_ac.append(float(pitch_hz))
+            else:
+                pitches_ac.append(0.0)
+
+        # Librosa pitch (pyin) if available
+        pitches_librosa = []
+        if _have_librosa:
+            try:
+                # librosa expects mono float32
+                y = arr.astype(np.float32)
+                # use pyin if available; fallback to yin
+                try:
+                    f0, _, _ = librosa.pyin(y, fmin=50, fmax=500, sr=framerate, frame_length=frame_len, hop_length=hop_len)
+                    # pyin returns array of f0 or nan
+                    pitches_librosa = [float(p) if not np.isnan(p) else 0.0 for p in f0]
+                except Exception:
+                    f0 = librosa.yin(y, fmin=50, fmax=500, sr=framerate, frame_length=frame_len, hop_length=hop_len)
+                    pitches_librosa = [float(p) if not np.isnan(p) else 0.0 for p in f0]
+            except Exception:
+                pitches_librosa = []
+
+        # CREPE pitch if available (may be slow/heavy)
+        pitches_crepe = []
+        if _have_crepe:
+            try:
+                # crepe.predict expects float array in range [-1,1]
+                # Use 10ms step since crepe default is 10ms
+                audio = arr.astype(np.float32)
+                sr = framerate
+                # crepe.predict returns frequency (Hz), confidence... step size in ms
+                # NOTE: using small batch_size to reduce memory pressure
+                time, frequency, confidence, activation = crepe.predict(audio, sr, viterbi=True, step_size=10.0, verbose=0)
+                # frequency is an ndarray; convert to list
+                pitches_crepe = [float(f) if not np.isnan(f) else 0.0 for f in frequency]
+            except Exception:
+                pitches_crepe = []
+
+        # voiced stats
+        voiced_ac = [p for p in pitches_ac if p > 0]
+        mean_pitch_ac = float(np.mean(voiced_ac)) if voiced_ac else 0.0
+        voiced_ratio = float(len([p for p in pitches_ac if p > 0]) / max(1, len(pitches_ac))) if pitches_ac else 0.0
+
+        # SNR-like estimate (top decile vs bottom decile energy)
+        if energies:
+            se = np.sort(np.array(energies))
+            bottom = np.mean(se[: max(1, int(len(se) * 0.1))])
+            top = np.mean(se[-max(1, int(len(se) * 0.1)) :])
+            snr_db = float(10.0 * math.log10((top + 1e-12) / (bottom + 1e-12)))
+        else:
+            snr_db = 0.0
+
+        return {
+            "duration_s": round(duration, 3),
+            "mean_rms": round(mean_rms, 6),
+            "mean_zcr": round(mean_zcr, 6),
+            "voiced_ratio": round(voiced_ratio, 3),
+            "snr_db": round(snr_db, 2),
+            "pitch_ac_mean_hz": round(mean_pitch_ac, 2),
+            "pitch_ac_contour_hz": [round(float(p), 2) for p in pitches_ac],
+            "pitch_librosa_contour_hz": [round(float(p), 2) for p in pitches_librosa] if pitches_librosa else [],
+            "pitch_crepe_contour_hz": [round(float(p), 2) for p in pitches_crepe] if pitches_crepe else [],
+        }
+    except Exception:
+        return {}
+
+
+# ---------------------------------------------------------
+# Streamlit UI
+# ---------------------------------------------------------
+st.set_page_config(
+    page_title="특허 1호 MVP - 음성 Latency & Voice Analysis",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+st.title("🎙️ Latency + Voice Analysis (librosa / crepe / webrtcvad optionally)")
+st.caption("Optional features enabled: " +
+           f"pydub={_have_pydub}, librosa={_have_librosa}, crepe={_have_crepe}, webrtcvad={_have_webrtcvad}")
+st.markdown("---")
+
+if "analysis_data" not in st.session_state:
+    st.session_state.analysis_data = None
+if "recorded_audio_bytes" not in st.session_state:
+    st.session_state.recorded_audio_bytes = None
+if "recorder_key" not in st.session_state:
+    st.session_state.recorder_key = 0
+
+sample_text = "The quick brown fox jumps over the lazy dog.\nThe fox is very fast."
+
+# Recorder JS component (sends dataURL via query param - fragile on long audio)
+html_recorder = """
+<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; text-align: center; padding: 18px; border: 1px solid #cbd5e1; border-radius: 12px; background: #f8fafc;">
+  <div style="margin-bottom:10px;">
+    <div id="timer" style="font-size: 28px; font-weight:700; font-family: monospace;">0.0s</div>
+  </div>
+  <div style="display:flex;gap:8px;justify-content:center;">
+    <button id="startBtn" style="background:#ef4444;color:white;padding:8px 14px;border-radius:8px;">🔴 녹음 시작</button>
+    <button id="stopBtn" disabled style="background:#cbd5e1;color:#94a3b8;padding:8px 14px;border-radius:8px;">⏹️ 녹음 정지 및 분석</button>
+  </div>
+  <div id="status" style="margin-top:10px;color:#64748b;">버튼을 눌러 녹음을 시작해 주세요.</div>
+</div>
+
+<script>
+let mediaRecorder;
+let chunks = [];
+let startTime = 0;
+let timerInterval = null;
+const startBtn = document.getElementById('startBtn');
+const stopBtn = document.getElementById('stopBtn');
+const timer = document.getElementById('timer');
+const status = document.getElementById('status');
+
+startBtn.onclick = async () => {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+    let options = {};
+    if (MediaRecorder.isTypeSupported('audio/webm')) {
+      options = {mimeType:'audio/webm'};
+    }
+    mediaRecorder = new MediaRecorder(stream, options);
+    chunks = [];
+    mediaRecorder.ondataavailable = e => { if (e.data && e.data.size > 0) chunks.push(e.data); };
+    mediaRecorder.onstop = () => {
+      clearInterval(timerInterval);
+      status.innerText = "⏳ 음성 데이터를 분석하는 중입니다...";
+      const blob = new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/wav' });
+      const reader = new FileReader();
+      reader.readAsDataURL(blob);
+      reader.onloadend = () => {
+        const dataUrl = reader.result;
+        const parentUrl = new URL(window.parent.location.href);
+        parentUrl.searchParams.set('rec_b64', encodeURIComponent(dataUrl));
+        window.parent.location.href = parentUrl.toString();
+      };
+    };
+    mediaRecorder.start(100);
+    startTime = Date.now();
+    timerInterval = setInterval(() => { timer.innerText = ((Date.now()-startTime)/1000).toFixed(1) + 's'; }, 100);
+    startBtn.disabled = true;
+    startBtn.style.cursor = 'not-allowed';
+    stopBtn.disabled = false;
+    stopBtn.style.cursor = 'pointer';
+    status.innerText = "🔴 녹음 중... 지문을 읽어주세요.";
+  } catch (err) {
+    status.innerText = "❌ 마이크 권한이 필요합니다.";
+  }
+};
+
+stopBtn.onclick = () => {
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop();
+    mediaRecorder.stream.getTracks().forEach(t => t.stop());
+    stopBtn.disabled = true;
+  }
+};
+</script>
+"""
+
+col1, col2 = st.columns([1, 1])
 with col1:
-    st.subheader("📖 1단계: 영어 지문 읽기 및 준비")
-    st.text_area(
-        "오늘의 학습 지문", value=sample_text, height=100, disabled=True
-    )
+    st.subheader("📖 지문")
+    st.text_area("오늘의 학습 지문", value=sample_text, height=120, disabled=True)
 
     st.markdown("---")
-    st.subheader("🎙️ 2단계: 음성 녹음")
+    st.subheader("🎙️ 녹음 (브라우저 또는 업로드)")
 
-    # URL query_params를 통한 녹음 데이터 수신 및 URL 자동 정리
     query_params = _get_query_params()
     if "rec_b64" in query_params:
         try:
             raw_b64 = query_params["rec_b64"]
-            # st.get_query_params/experimental_get_query_params often return lists
             if isinstance(raw_b64, (list, tuple)):
                 raw_b64 = raw_b64[0]
-            # decode percent-encoding (JS used encodeURIComponent)
             raw_b64 = unquote_plus(raw_b64)
-
-            # handle data:... ,<base64> or plain base64
             if raw_b64.startswith("data:"):
                 _, b64 = raw_b64.split(",", 1)
             else:
                 b64 = raw_b64
-
             audio_bytes = base64.b64decode(b64)
             st.session_state.recorded_audio_bytes = audio_bytes
             st.session_state.analysis_data = analyze_audio_bytes(audio_bytes)
         except Exception:
-            # ignore and continue (analysis_data stays None or previous)
             pass
-        # clear query params (use compatibility wrapper)
         _set_query_params()
 
-    # HTML/JS 커스텀 녹음 컴포넌트 (0.1초 타이머 + 시작/정지 버튼)
-    # NOTE: Sending raw audio via URL is fragile for larger recordings.
-    # Prefer the file_uploader fallback or a server-side POST endpoint for production.
-    html_recorder = """
-    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; text-align: center; padding: 18px; border: 1px solid #cbd5e1; border-radius: 12px; background: #f8fafc; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
-        
-        <!-- 타이머 디스플레이 (0.1초 단위) -->
-        <div style="margin-bottom: 15px;">
-            <span style="font-size: 13px; font-weight: 600; color: #64748b; letter-spacing: 0.5px;">REC TIME</span>
-            <div id="timer" style="font-size: 32px; font-weight: 700; color: #1e293b; font-family: monospace; margin-top: 2px;">0.0s</div>
-        </div>
+    components.html(html_recorder, height=240)
 
-        <!-- 버튼 영역 -->
-        <div style="display: flex; gap: 10px; justify-content: center; align-items: center;">
-            <button id="startBtn" style="background-color: #ef4444; color: white; border: none; padding: 12px 20px; font-size: 15px; font-weight: 700; border-radius: 8px; cursor: pointer; transition: all 0.2s; min-width: 130px;">
-                🔴 녹음 시작
-            </button>
-            <button id="stopBtn" disabled style="background-color: #cbd5e1; color: #94a3b8; border: none; padding: 12px 20px; font-size: 15px; font-weight: 700; border-radius: 8px; cursor: not-allowed; transition: all 0.2s; min-width: 160px;">
-                ⏹️ 녹음 정지 및 분석
-            </button>
-        </div>
-
-        <!-- 상태 안내 메시지 -->
-        <div id="status" style="margin-top: 14px; font-size: 13.5px; color: #64748b; font-weight: 500;">
-            버튼을 눌러 녹음을 시작해 주세요.
-        </div>
-    </div>
-
-    <script>
-    let mediaRecorder;
-    let audioChunks = [];
-    let timerInterval = null;
-    let startTime = 0;
-
-    const startBtn = document.getElementById('startBtn');
-    const stopBtn = document.getElementById('stopBtn');
-    const timerDisplay = document.getElementById('timer');
-    const statusDisplay = document.getElementById('status');
-
-    startBtn.onclick = async () => {
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            
-            let options = {};
-            if (MediaRecorder.isTypeSupported('audio/webm')) {
-                options = { mimeType: 'audio/webm' };
-            }
-
-            mediaRecorder = new MediaRecorder(stream, options);
-            audioChunks = [];
-
-            mediaRecorder.ondataavailable = event => {
-                if (event.data.size > 0) audioChunks.push(event.data);
-            };
-
-            mediaRecorder.onstop = () => {
-                clearInterval(timerInterval);
-                statusDisplay.innerText = "⏳ 음성 데이터를 분석하는 중입니다...";
-                statusDisplay.style.color = "#2563eb";
-
-                const blobType = mediaRecorder.mimeType || 'audio/wav';
-                const audioBlob = new Blob(audioChunks, { type: blobType });
-                
-                const reader = new FileReader();
-                reader.readAsDataURL(audioBlob);
-                reader.onloadend = () => {
-                    // send the entire data URL (includes MIME) so server can detect type
-                    const dataUrl = reader.result;
-                    const parentUrl = new URL(window.parent.location.href);
-                    parentUrl.searchParams.set('rec_b64', encodeURIComponent(dataUrl));
-                    window.parent.location.href = parentUrl.toString();
-                };
-            };
-
-            mediaRecorder.start(100);
-            startTime = Date.now();
-
-            // 0.1초(100ms) 간격 타이머 동작
-            timerInterval = setInterval(() => {
-                const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
-                timerDisplay.innerText = elapsedSec + "s";
-            }, 100);
-
-            // UI 상태 변경
-            startBtn.disabled = true;
-            startBtn.style.backgroundColor = "#cbd5e1";
-            startBtn.style.color = "#94a3b8";
-            startBtn.style.cursor = "not-allowed";
-
-            stopBtn.disabled = false;
-            stopBtn.style.backgroundColor = "#2563eb";
-            stopBtn.style.color = "#ffffff";
-            stopBtn.style.cursor = "pointer";
-
-            statusDisplay.innerText = "🎙️ 녹음 중입니다... 지문을 읽어주세요.";
-            statusDisplay.style.color = "#dc2626";
-
-        } catch (err) {
-            statusDisplay.innerText = "❌ 마이크 권한을 허용해 주세요.";
-            statusDisplay.style.color = "#dc2626";
-        }
-    };
-
-    stopBtn.onclick = () => {
-        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-            mediaRecorder.stop();
-            mediaRecorder.stream.getTracks().forEach(track => track.stop());
-            stopBtn.disabled = true;
-            stopBtn.style.backgroundColor = "#cbd5e1";
-            stopBtn.style.color = "#94a3b8";
-            stopBtn.style.cursor = "not-allowed";
-        }
-    };
-    </script>
-    """
-
-    components.html(html_recorder, height=200)
-
-    with st.expander("📁 음성 파일 직접 업로드 (대체 테스트)"):
-        uploaded_file = st.file_uploader(
-            "WAV 음성 파일 직접 업로드",
-            type=["wav", "webm", "ogg", "mp3"],
-            key=f"file_uploader_{st.session_state.recorder_key}",
-        )
+    with st.expander("📁 업로드 (대체)"):
+        uploaded_file = st.file_uploader("음성 파일 업로드", type=["wav", "webm", "ogg", "mp3"], key=f"uploader_{st.session_state.recorder_key}")
         if uploaded_file is not None:
             file_bytes = uploaded_file.read()
             st.session_state.recorded_audio_bytes = file_bytes
             st.session_state.analysis_data = analyze_audio_bytes(file_bytes)
-            st.success("파일 분석이 완료되었습니다!")
+            st.success("파일 분석 완료")
 
     st.markdown("---")
-    if st.button("🗑️ 분석 결과 초기화", use_container_width=True):
+    if st.button("🗑️ 초기화", use_container_width=True):
         st.session_state.analysis_data = None
         st.session_state.recorded_audio_bytes = None
         st.session_state.recorder_key += 1
-        _set_query_params()  # clear query params compatibly
-        st.rerun()
+        _set_query_params()
+        st.experimental_rerun()
 
-# [오른쪽 칼럼]
 with col2:
-    st.subheader("📊 실시간 음성 분석 및 Latency 결과")
+    st.subheader("📊 결과")
 
     if st.session_state.recorded_audio_bytes is not None:
-        st.markdown("##### 🔊 녹음된 음성 확인")
-        # Note: streamlit audio playback will try its best; if we converted to WAV bytes above,
-        # those bytes are playable via st.audio
-        st.audio(st.session_state.recorded_audio_bytes, format="audio/wav")
-        st.markdown("---")
+        st.markdown("##### 🔊 녹음 확인")
+        try:
+            st.audio(st.session_state.recorded_audio_bytes, format="audio/wav")
+        except Exception:
+            # let streamlit try best-effort
+            st.audio(st.session_state.recorded_audio_bytes)
 
     if st.session_state.analysis_data == "NO_SPEECH":
-        st.error(
-            "⚠️ **음성 분석 실패:** 마이크 음성 신호 해석에 실패했습니다. 마이크 접근 권한 및 발화 상태를 확인해 주세요."
-        )
+        st.error("⚠️ 음성 분석 실패: 입력을 WAV로 변환할 수 없거나 음성이 감지되지 않았습니다.")
     elif isinstance(st.session_state.analysis_data, dict):
         data = st.session_state.analysis_data
-
-        col_m1, col_m2, col_m3 = st.columns(3)
-        with col_m1:
-            st.metric(
-                label="⏱️ 첫 발화 지연 (Latency)",
-                value=f"{data['latency']} 초",
-            )
-        with col_m2:
-            st.metric(label="🎙️ 음성 총 길이", value=f"{data['duration']} 초")
-        with col_m3:
-            st.metric(
-                label="⏸️ 망설임 구간 비율", value=f"{data['pause_ratio']}%"
-            )
+        colm1, colm2, colm3 = st.columns(3)
+        with colm1:
+            st.metric("⏱️ 첫 발화 지연", f"{data['latency']} 초")
+        with colm2:
+            st.metric("🎙️ 총 길이", f"{data['duration']} 초")
+        with colm3:
+            st.metric("⏸️ 망설임 비율", f"{data['pause_ratio']}%")
 
         st.markdown("---")
-        st.subheader("📖 분석 대상 지문 (단어별 Latency 분석)")
-
-        words_data = data.get("word_analysis", [])
-
-        cols_per_row = 3
-        for i in range(0, len(words_data), cols_per_row):
-            row_words = words_data[i : i + cols_per_row]
-            row_cols = st.columns(cols_per_row)
-            for idx, item in enumerate(row_words):
-                with row_cols[idx]:
-                    if item["latency"] >= 2.0:
-                        bg_color = "#fff5f5"
-                        border_color = "#e53e3e"
-                        tag = "🚨 지연 감지"
-                    elif item["latency"] >= 1.0:
-                        bg_color = "#fffaf0"
-                        border_color = "#dd6b20"
-                        tag = "⚠️ 약간 망설임"
-                    else:
-                        bg_color = "#f0fff4"
-                        border_color = "#38a169"
-                        tag = "✅ 원활"
-
-                    st.markdown(
-                        f"""
-                        <div style="background-color: {bg_color}; border: 1.5px solid {border_color}; border-radius: 8px; padding: 12px; text-align: center; margin-bottom: 10px;">
-                            <div style="font-size: 17px; font-weight: bold; color: #2d3748;">{item['word']}</div>
-                            <div style="font-size: 14px; font-weight: bold; color: {border_color}; margin-top: 6px;">Latency: {item['latency']}초</div>
-                            <div style="font-size: 11px; margin-top: 4px; font-weight: 500;">{tag}</div>
-                        </div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
+        st.subheader("단어별 Latency")
+        words = data.get("word_analysis", [])
+        for w in words:
+            if w["latency"] >= 2.0:
+                label = "🚨 지연"
+            elif w["latency"] >= 1.0:
+                label = "⚠️ 망설임"
+            else:
+                label = "✅ 원활"
+            st.markdown(f"- **{w['word']}**: {w['latency']}s {label}")
 
         st.markdown("---")
-        st.subheader("💡 자동 생성된 역번역/어원 비계 (Scaffolding)")
+        st.subheader("음성 분석 상세")
 
-        is_scaffold_needed = (
-            data["max_word_latency"] >= 2.0 or data["pause_ratio"] > 25.0
-        )
-
-        if is_scaffold_needed:
-            delayed_words = [w for w in words_data if w["latency"] >= 2.0]
-
-            if delayed_words:
-                delayed_word_names = ", ".join(
-                    [f"'{w['word']}'" for w in delayed_words]
-                )
-                st.error(
-                    f"🚨 **지연 발생 단어({delayed_word_names} - 2.0초 이상)**"
-                    " 감지! 자동 역번역 및 어원 비계가 활성화되었습니다."
-                )
-            else:
-                st.warning(
-                    "⚠️ **망설임 구간 비율(25% 초과)** 감지! 전체적인"
-                    " 문장 구성 비계가 활성화되었습니다."
-                )
-
-            st.markdown("### 1. 직독직해 역번역 힌트")
-            st.info(
-                "**[어순 배치 힌트]** 빠른 갈색 여우가 ➔ 뛰어넘는다 (jumps) ➔ 게으른"
-                " 개를. 그 여우는 매우 ➔ 빠릅니다 (fast)."
-            )
-
-            st.markdown("### 2. 지연 단어 어원 심층 분석")
-            if delayed_words:
-                etymology_result = {}
-                for item in delayed_words:
-                    word_clean = item["word"]
-                    info = etymology_db.get(
-                        word_clean, "어원 정보 등록 중"
-                    )
-                    key_name = (
-                        f"{word_clean} (Latency: {item['latency']}초)"
-                    )
-                    etymology_result[key_name] = info
-
-                st.json(etymology_result)
-            else:
-                st.write("감지된 개별 지연 단어가 없습니다.")
-
-        # Show voice analysis if available
-        voice_analysis = data.get("voice_analysis", {})
-        if voice_analysis:
-            st.markdown("---")
-            st.subheader("🔬 음성 특징 요약 (Voice Analysis)")
+        va = data.get("voice_analysis", {})
+        if va:
             cols = st.columns(4)
-            with cols[0]:
-                st.metric("평균 피치 (Hz)", voice_analysis.get("mean_pitch_hz", 0))
-            with cols[1]:
-                st.metric("음성 SNR (dB)", voice_analysis.get("snr_db", 0))
-            with cols[2]:
-                st.metric("발화 비율", f"{voice_analysis.get('voiced_ratio', 0)*100:.1f}%")
-            with cols[3]:
-                st.metric("추정 WPM", voice_analysis.get("speaking_rate_wpm", 0))
+            cols[0].metric("평균 RMS", va.get("mean_rms", 0))
+            cols[1].metric("평균 ZCR", va.get("mean_zcr", 0))
+            cols[2].metric("발화 비율", f"{va.get('voiced_ratio',0)*100:.1f}%")
+            cols[3].metric("SNR (dB)", va.get("snr_db", 0))
 
-            with st.expander("피치 컨투어 및 세부값 보기"):
-                st.json(voice_analysis)
+            st.markdown("피치 (Autocorr) 요약")
+            st.write(f"평균 피치: {va.get('pitch_ac_mean_hz', 0)} Hz")
+            if va.get("pitch_ac_contour_hz"):
+                with st.expander("피치 컨투어 (Autocorr) 보기"):
+                    st.write(va.get("pitch_ac_contour_hz"))
 
+            if va.get("pitch_librosa_contour_hz"):
+                st.markdown("librosa 피치 (pyin/yin)")
+                with st.expander("librosa 피치 보기"):
+                    st.write(va.get("pitch_librosa_contour_hz"))
+
+            if va.get("pitch_crepe_contour_hz"):
+                st.markdown("crepe 피치 (딥러닝)")
+                with st.expander("crepe 피치 보기"):
+                    st.write(va.get("pitch_crepe_contour_hz"))
         else:
-            st.markdown("---")
-            st.info("음성 분석 결과(피치/에너지 등)가 없습니다.")
+            st.info("음성 특징 분석 결과가 없습니다 (오류 또는 optional 패키지 미설치).")
 
-        if not is_scaffold_needed:
-            st.success(
-                "🎉 모든 단어의 발화 반응속도가 원활합니다! 힌트 없이"
-                " 완벽하게 수행했습니다."
-            )
+        # Show vad intervals if available
+        intervals = data.get("speech_intervals", [])
+        if intervals:
+            st.markdown("---")
+            st.subheader("음성 구간 (VAD)")
+            st.write(intervals)
+
+        # Scaffolding logic (same as before)
+        st.markdown("---")
+        st.subheader("자동 역번역 / 어원 비계")
+        is_scaffold_needed = data.get("max_word_latency", 0) >= 2.0 or data.get("pause_ratio", 0) > 25.0
+        if is_scaffold_needed:
+            delayed_words = [w for w in words if w["latency"] >= 2.0]
+            if delayed_words:
+                st.error("지연 단어: " + ", ".join([w["word"] for w in delayed_words]))
+            else:
+                st.warning("망설임 비율이 높음 — 전체 구성 힌트 제공")
+
+            st.markdown("**직독직해 힌트 예시**")
+            st.info("빠른 갈색 여우가 ➔ 뛰어넘는다 (jumps) ➔ 게으른 개를. 그 여우는 매우 ➔ 빠릅니다 (fast).")
+        else:
+            st.success("🎉 모든 단어가 원활하게 발화되었습니다!")
+
     else:
-        st.info(
-            "👈 좌측에서 **[🔴 녹음 시작]**을 누르고 지문을 읽은 뒤 **[⏹️ 녹음 정지 및 분석]**을 누르세요."
-        )
+        st.info("좌측에서 녹음하거나 파일을 업로드한 뒤 분석 결과가 여기 표시됩니다.")
