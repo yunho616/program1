@@ -1,3 +1,4 @@
+[entire file contents]
 import base64
 import io
 import math
@@ -499,7 +500,8 @@ html_recorder = """
   </div>
   <div style="display:flex;gap:8px;justify-content:center;">
     <button id="startBtn" style="background:#ef4444;color:white;padding:8px 14px;border-radius:8px;">🔴 녹음 시작</button>
-    <button id="stopBtn" disabled style="background:#cbd5e1;color:#94a3b8;padding:8px 14px;border-radius:8px;">⏹️ 녹음 정지 및 분석</button>
+    <!-- Stop button default color changed to blue; disabled appearance will be handled in JS -->
+    <button id="stopBtn" disabled style="background:#2563eb;color:#ffffff;padding:8px 14px;border-radius:8px;cursor:not-allowed;">⏹️ 녹음 정지 및 분석</button>
   </div>
   <div id="status" style="margin-top:10px;color:#64748b;">버튼을 눌러 녹음을 시작해 주세요.</div>
 </div>
@@ -536,14 +538,31 @@ startBtn.onclick = async () => {
         parentUrl.searchParams.set('rec_b64', encodeURIComponent(dataUrl));
         window.parent.location.href = parentUrl.toString();
       };
+      // reset stop button to disabled look
+      stopBtn.disabled = true;
+      stopBtn.style.background = "#cbd5e1";
+      stopBtn.style.color = "#94a3b8";
+      stopBtn.style.cursor = "not-allowed";
+      // reset start button UI
+      startBtn.disabled = false;
+      startBtn.style.background = "#ef4444";
+      startBtn.style.color = "#ffffff";
+      startBtn.style.cursor = "pointer";
     };
     mediaRecorder.start(100);
     startTime = Date.now();
     timerInterval = setInterval(() => { timer.innerText = ((Date.now()-startTime)/1000).toFixed(1) + 's'; }, 100);
+    // update UI: start disabled, stop enabled (blue)
     startBtn.disabled = true;
     startBtn.style.cursor = 'not-allowed';
+    startBtn.style.background = "#cbd5e1";
+    startBtn.style.color = "#94a3b8";
+
     stopBtn.disabled = false;
     stopBtn.style.cursor = 'pointer';
+    stopBtn.style.background = "#2563eb";
+    stopBtn.style.color = "#ffffff";
+
     status.innerText = "🔴 녹음 중... 지문을 읽어주세요.";
   } catch (err) {
     status.innerText = "❌ 마이크 권한이 필요합니다.";
@@ -554,7 +573,16 @@ stopBtn.onclick = () => {
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
     mediaRecorder.stop();
     mediaRecorder.stream.getTracks().forEach(t => t.stop());
+    // disable stop button and set disabled styles
     stopBtn.disabled = true;
+    stopBtn.style.background = "#cbd5e1";
+    stopBtn.style.color = "#94a3b8";
+    stopBtn.style.cursor = "not-allowed";
+    // re-enable start button UI
+    startBtn.disabled = false;
+    startBtn.style.background = "#ef4444";
+    startBtn.style.color = "#ffffff";
+    startBtn.style.cursor = "pointer";
   }
 };
 </script>
