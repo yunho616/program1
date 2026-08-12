@@ -5,6 +5,7 @@ import struct
 import wave
 from urllib.parse import unquote_plus
 
+import numpy as np
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -149,7 +150,7 @@ etymology_db = {
 
 
 # ---------------------------------------------------------
-# 3. WAV 분석 함수
+# 3. WAV 분석 함수 & voice analysis
 # ---------------------------------------------------------
 def _ensure_wav_bytes(raw_bytes: bytes) -> bytes | None:
     """
@@ -171,6 +172,133 @@ def _ensure_wav_bytes(raw_bytes: bytes) -> bytes | None:
         return out.getvalue()
     except Exception:
         return None
+
+
+def analyze_voice_data(wav_bytes):
+    """
+    Lightweight voice analysis:
+    - mixes to mono
+    - computes frame-level RMS, ZCR
+    - estimates pitch via autocorrelation per frame (50-500Hz)
+    - computes voiced ratio, SNR estimate, speaking rate (WPM) estimate based on target_words
+    Returns a dict with summary metrics and pitch contour.
+    """
+    try:
+        wf = wave.open(io.BytesIO(wav_bytes), "rb")
+        nchannels = wf.getnchannels()
+        sampwidth = wf.getsampwidth()
+        framerate = wf.getframerate()
+        nframes = wf.getnframes()
+
+        if nframes == 0 or framerate == 0:
+            wf.close()
+            return {}
+
+        raw = wf.readframes(nframes)
+        wf.close()
+
+        # Convert PCM to numpy array
+        if sampwidth == 2:
+            samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
+            norm_factor = float(2 ** 15)
+        elif sampwidth == 1:
+            samples = (np.frombuffer(raw, dtype=np.uint8).astype(np.int16) - 128).astype(np.float32)
+            norm_factor = float(2 ** 7)
+        else:
+            return {}
+
+        # Mixdown to mono
+        if nchannels > 1:
+            try:
+                samples = samples.reshape(-1, nchannels)
+                samples = samples.mean(axis=1)
+            except Exception:
+                # if reshaping fails, fallback to raw mono array
+                samples = samples
+
+        samples = samples / (norm_factor + 1e-12)
+        total_duration = len(samples) / framerate
+
+        # Frame settings
+        frame_ms = 30
+        hop_ms = 10
+        frame_len = max(1, int(framerate * frame_ms / 1000))
+        hop_len = max(1, int(framerate * hop_ms / 1000))
+
+        energies = []
+        zcrs = []
+        pitches = []
+
+        for start in range(0, max(1, len(samples) - frame_len + 1), hop_len):
+            frame = samples[start : start + frame_len]
+            # RMS energy
+            energy = float(np.sqrt(np.mean(frame * frame) + 1e-12))
+            energies.append(energy)
+            # ZCR
+            zcr = float(((frame[:-1] * frame[1:]) < 0).sum() / max(1, (len(frame) - 1)))
+            zcrs.append(zcr)
+
+            # Pitch estimation via autocorrelation (normalized)
+            if energy < 1e-4:
+                pitches.append(0.0)
+                continue
+            corr = np.correlate(frame, frame, mode="full")
+            corr = corr[len(corr) // 2 :]
+            # normalize
+            if np.max(np.abs(corr)) > 0:
+                corr = corr / (np.max(np.abs(corr)) + 1e-12)
+            # plausible pitch lag range
+            lag_min = max(1, int(framerate / 500))
+            lag_max = min(len(corr) - 1, int(framerate / 50))
+            if lag_min >= lag_max:
+                pitches.append(0.0)
+                continue
+            segment = corr[lag_min : lag_max + 1]
+            peak_idx = int(np.argmax(segment)) + lag_min
+            peak_val = corr[peak_idx] if peak_idx < len(corr) else 0.0
+            if peak_val > 0.3:
+                pitch_hz = framerate / peak_idx
+                pitches.append(float(pitch_hz))
+            else:
+                pitches.append(0.0)
+
+        # Summary metrics
+        voiced_frames = [p for p in pitches if p > 0.0]
+        mean_pitch = float(np.mean(voiced_frames)) if voiced_frames else 0.0
+        median_pitch = float(np.median(voiced_frames)) if voiced_frames else 0.0
+        pitch_std = float(np.std(voiced_frames)) if voiced_frames else 0.0
+        mean_rms = float(np.mean(energies)) if energies else 0.0
+        mean_zcr = float(np.mean(zcrs)) if zcrs else 0.0
+        voiced_ratio = float(len(voiced_frames) / max(1, len(pitches))) if pitches else 0.0
+
+        # SNR-like estimate: compare top and bottom deciles of frame energy
+        if energies:
+            se = np.sort(np.array(energies))
+            bottom = np.mean(se[: max(1, int(len(se) * 0.1))])
+            top = np.mean(se[-max(1, int(len(se) * 0.1)) :])
+            snr = float(10.0 * math.log10((top + 1e-12) / (bottom + 1e-12)))
+        else:
+            snr = 0.0
+
+        # Rough speaking rate estimate (WPM) using our target_words count and estimated speech duration
+        speech_duration = voiced_ratio * total_duration
+        speaking_rate_wpm = float((len(target_words) / speech_duration * 60.0) if speech_duration > 0.1 else 0.0)
+
+        return {
+            "mean_pitch_hz": round(mean_pitch, 2),
+            "median_pitch_hz": round(median_pitch, 2),
+            "pitch_std_hz": round(pitch_std, 2),
+            "pitch_contour_hz": [round(float(p), 2) for p in pitches],
+            "mean_rms": round(mean_rms, 6),
+            "mean_zcr": round(mean_zcr, 6),
+            "voiced_ratio": round(voiced_ratio, 3),
+            "snr_db": round(snr, 2),
+            "speaking_rate_wpm": round(speaking_rate_wpm, 1),
+            "total_duration": round(total_duration, 2),
+            "speech_duration": round(speech_duration, 2),
+        }
+    except Exception:
+        return {}
 
 
 def analyze_audio_bytes(raw_audio_bytes):
@@ -280,12 +408,17 @@ def analyze_audio_bytes(raw_audio_bytes):
             if word_latencies else 0.0
         )
 
+        # Add voice-level analysis
+        voice_analysis = analyze_voice_data(wav_bytes)
+
         return {
             "latency": first_latency,
             "duration": total_duration,
             "pause_ratio": pause_ratio,
             "word_analysis": word_latencies,
             "max_word_latency": max_word_latency,
+            "speech_intervals": speech_intervals,
+            "voice_analysis": voice_analysis,
         }
     except Exception:
         # Keep UI-compatible return value, but swallow unexpected exceptions here.
@@ -583,7 +716,30 @@ with col2:
                 st.json(etymology_result)
             else:
                 st.write("감지된 개별 지연 단어가 없습니다.")
+
+        # Show voice analysis if available
+        voice_analysis = data.get("voice_analysis", {})
+        if voice_analysis:
+            st.markdown("---")
+            st.subheader("🔬 음성 특징 요약 (Voice Analysis)")
+            cols = st.columns(4)
+            with cols[0]:
+                st.metric("평균 피치 (Hz)", voice_analysis.get("mean_pitch_hz", 0))
+            with cols[1]:
+                st.metric("음성 SNR (dB)", voice_analysis.get("snr_db", 0))
+            with cols[2]:
+                st.metric("발화 비율", f"{voice_analysis.get('voiced_ratio', 0)*100:.1f}%")
+            with cols[3]:
+                st.metric("추정 WPM", voice_analysis.get("speaking_rate_wpm", 0))
+
+            with st.expander("피치 컨투어 및 세부값 보기"):
+                st.json(voice_analysis)
+
         else:
+            st.markdown("---")
+            st.info("음성 분석 결과(피치/에너지 등)가 없습니다.")
+
+        if not is_scaffold_needed:
             st.success(
                 "🎉 모든 단어의 발화 반응속도가 원활합니다! 힌트 없이"
                 " 완벽하게 수행했습니다."
