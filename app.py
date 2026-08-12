@@ -3,8 +3,40 @@ import io
 import math
 import struct
 import wave
+from urllib.parse import unquote_plus
+
 import streamlit as st
 import streamlit.components.v1 as components
+
+# ---------------------------------------------------------
+# Query-param compatibility wrappers
+# Use these to support older/newer Streamlit versions
+# ---------------------------------------------------------
+def _get_query_params():
+    if hasattr(st, "get_query_params"):
+        return st.get_query_params()
+    if hasattr(st, "experimental_get_query_params"):
+        return st.experimental_get_query_params()
+    return {}
+
+
+def _set_query_params(params: dict | None = None):
+    # If params is None, clear the query string
+    if params is None:
+        if hasattr(st, "set_query_params"):
+            st.set_query_params()
+        elif hasattr(st, "experimental_set_query_params"):
+            st.experimental_set_query_params()
+        return
+
+    if hasattr(st, "set_query_params"):
+        st.set_query_params(**params)
+    elif hasattr(st, "experimental_set_query_params"):
+        st.experimental_set_query_params(**params)
+    else:
+        # no-op
+        return
+
 
 # ---------------------------------------------------------
 # [Pure Python] 음량(RMS) 분석 함수 - supports sampwidth=1 or 2 and multi-channel
@@ -276,24 +308,30 @@ with col1:
     st.subheader("🎙️ 2단계: 음성 녹음")
 
     # URL query_params를 통한 녹음 데이터 수신 및 URL 자동 정리
-    query_params = st.experimental_get_query_params()
+    query_params = _get_query_params()
     if "rec_b64" in query_params:
         try:
-            raw_b64 = query_params["rec_b64"][0]
-            # raw_b64 might be a data URL or plain base64; handle both
+            raw_b64 = query_params["rec_b64"]
+            # st.get_query_params/experimental_get_query_params often return lists
+            if isinstance(raw_b64, (list, tuple)):
+                raw_b64 = raw_b64[0]
+            # decode percent-encoding (JS used encodeURIComponent)
+            raw_b64 = unquote_plus(raw_b64)
+
+            # handle data:... ,<base64> or plain base64
             if raw_b64.startswith("data:"):
-                # data:[<mediatype>][;base64],<data>
-                header, b64 = raw_b64.split(",", 1)
+                _, b64 = raw_b64.split(",", 1)
             else:
                 b64 = raw_b64
+
             audio_bytes = base64.b64decode(b64)
             st.session_state.recorded_audio_bytes = audio_bytes
             st.session_state.analysis_data = analyze_audio_bytes(audio_bytes)
         except Exception:
             # ignore and continue (analysis_data stays None or previous)
             pass
-        # clear query params (use experimental_set_query_params)
-        st.experimental_set_query_params()
+        # clear query params (use compatibility wrapper)
+        _set_query_params()
 
     # HTML/JS 커스텀 녹음 컴포넌트 (0.1초 타이머 + 시작/정지 버튼)
     # NOTE: Sending raw audio via URL is fragile for larger recordings.
@@ -430,7 +468,7 @@ with col1:
         st.session_state.analysis_data = None
         st.session_state.recorded_audio_bytes = None
         st.session_state.recorder_key += 1
-        st.experimental_set_query_params()
+        _set_query_params()  # clear query params compatibly
         st.rerun()
 
 # [오른쪽 칼럼]
