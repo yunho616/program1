@@ -1,4 +1,3 @@
-# Full app.py (updated recorder JS with robust navigation + fallback download)
 import base64
 import io
 import math
@@ -491,7 +490,7 @@ if "last_error_msg" not in st.session_state:
 
 sample_text = "The quick brown fox jumps over the lazy dog.\nThe fox is very fast."
 
-# Recorder HTML/JS — improved fallback behavior
+# Recorder HTML/JS — removed new-tab fallback; use parent/top navigation or download fallback
 html_recorder = """
 <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; text-align: center; padding: 18px; border: 1px solid #cbd5e1; border-radius: 12px; background: #f8fafc;">
   <div style="margin-bottom:10px;">
@@ -546,45 +545,36 @@ startBtn.onclick = async () => {
       reader.readAsDataURL(blob);
       reader.onloadend = () => {
         const dataUrl = reader.result;
-        // Build a URL that contains the base64 in a rec_b64 param
         try {
           const parentUrl = new URL(window.parent.location.href);
           parentUrl.searchParams.set('rec_b64', encodeURIComponent(dataUrl));
-          // Try to navigate parent window (may fail-cross origin)
+          // Prefer location.replace to avoid adding browser history entry
           try {
-            window.parent.location.href = parentUrl.toString();
-            // if navigation works, we won't execute further fallback code in most browsers
+            window.parent.location.replace(parentUrl.toString());
             return;
           } catch (err) {
-            // parent navigation failed — try top
+            // try top
           }
           try {
-            window.top.location.href = parentUrl.toString();
+            window.top.location.replace(parentUrl.toString());
             return;
           } catch (err2) {
-            // top navigation failed — try opening new tab
+            // navigation blocked; fall back to download
           }
-          try {
-            window.open(parentUrl.toString(), '_blank');
-            status.innerText = "새 탭에서 분석을 시도했습니다. 탭을 확인하세요.";
-            return;
-          } catch (err3) {
-            // all navigation attempts failed — fallback to download
-          }
-          // Final fallback: download the recorded file and instruct user to upload it
+          // Final fallback: download the recorded file and instruct user to upload
           downloadBlob(blob, 'recording.webm');
           status.innerText = "녹음 파일을 다운로드했습니다. 오른쪽의 '음성 파일 업로드'로 파일을 업로드하세요.";
         } catch (ex) {
-          // If building parentUrl failed (rare), fallback to download
           downloadBlob(blob, 'recording.webm');
           status.innerText = "오류 발생 — 녹음 파일을 다운로드했습니다. 오른쪽의 '음성 파일 업로드'로 파일을 업로드하세요.";
         }
       };
-      // reset UI
+      // reset stop button to disabled look
       stopBtn.disabled = true;
       stopBtn.style.background = "#cbd5e1";
       stopBtn.style.color = "#94a3b8";
       stopBtn.style.cursor = "not-allowed";
+      // reset start button UI
       startBtn.disabled = false;
       startBtn.style.background = "#ef4444";
       startBtn.style.color = "#ffffff";
