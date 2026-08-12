@@ -1,4 +1,3 @@
-[entire file contents]
 import base64
 import io
 import math
@@ -160,7 +159,6 @@ def _ensure_wav_bytes(raw_bytes: bytes) -> Optional[bytes]:
     if ffmpeg_exe:
         try:
             # Use ffmpeg to read from stdin and write wav to stdout
-            # -hide_banner -loglevel error to reduce noise
             proc = subprocess.run(
                 [ffmpeg_exe, "-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-f", "wav", "pipe:1"],
                 input=raw_bytes,
