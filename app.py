@@ -70,12 +70,20 @@ def _get_query_params():
     return {}
 
 
-def _set_query_params(params: dict | None = None):
+def _set_query_params(params=None):
     if params is None:
         if hasattr(st, "set_query_params"):
-            st.set_query_params()
+            # calling without args clears params in newer streamlit; keep best-effort
+            try:
+                st.set_query_params()
+            except TypeError:
+                # older/other implementations might not accept empty call; fall back
+                st.set_query_params(**{})
         elif hasattr(st, "experimental_set_query_params"):
-            st.experimental_set_query_params()
+            try:
+                st.experimental_set_query_params()
+            except TypeError:
+                st.experimental_set_query_params(**{})
         return
     if hasattr(st, "set_query_params"):
         st.set_query_params(**params)
@@ -239,8 +247,8 @@ def analyze_voice_data(wav_bytes: bytes) -> Dict:
 
         duration = len(arr) / framerate
 
-        frame_len = int(0.03 * framerate)
-        hop_len = int(0.01 * framerate)
+        frame_len = max(1, int(0.03 * framerate))
+        hop_len = max(1, int(0.01 * framerate))
 
         energies = []
         zcrs = []
@@ -260,7 +268,7 @@ def analyze_voice_data(wav_bytes: bytes) -> Dict:
                 pitches_ac.append(0.0)
                 continue
             corr = np.correlate(f, f, mode="full")
-            corr = corr[len(corr) // 2 :]
+            corr = corr[len(corr) // 2 : ]
             if np.max(np.abs(corr)) == 0:
                 pitches_ac.append(0.0)
                 continue
@@ -353,7 +361,7 @@ def analyze_audio_bytes(raw_audio_bytes):
         total_duration = round(nframes / float(framerate), 1)
 
         frame_duration = 0.05
-        frame_size = int(framerate * frame_duration)
+        frame_size = max(1, int(framerate * frame_duration))
 
         chunk_rms = []
         wav_file.rewind()
@@ -547,7 +555,8 @@ startBtn.onclick = async () => {
         const dataUrl = reader.result;
         try {
           const parentUrl = new URL(window.parent.location.href);
-          parentUrl.searchParams.set('rec_b64', encodeURIComponent(dataUrl));
+          // Don't double-encode: searchParams.set will percent-encode automatically
+          parentUrl.searchParams.set('rec_b64', dataUrl);
           // Prefer location.replace to avoid adding browser history entry
           try {
             window.parent.location.replace(parentUrl.toString());
