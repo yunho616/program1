@@ -1,310 +1,472 @@
 import base64
+import io
 import math
+import shutil
 import struct
+import subprocess
 import wave
 from io import BytesIO
-from urllib.parse import unquote_plus, quote_plus
+from urllib.parse import unquote_plus
+
+from typing import List, Optional, Tuple, Dict
 
 import numpy as np
 import streamlit as st
+import streamlit.components.v1 as components
 
-# ==========================================
-# 0. STREAMLIT CONFIG & UTILS
-# ==========================================
+# Optional libs detection
+_have_pydub = False
+_have_imageio_ffmpeg = False
+_have_librosa = False
+_have_crepe = False
+_have_webrtcvad = False
+
+try:
+    from pydub import AudioSegment  # type: ignore
+    _have_pydub = True
+except Exception:
+    AudioSegment = None
+
+try:
+    import imageio_ffmpeg as _iioffmpeg  # type: ignore
+    _have_imageio_ffmpeg = True
+except Exception:
+    _iioffmpeg = None
+
+try:
+    import librosa  # type: ignore
+    _have_librosa = True
+except Exception:
+    librosa = None
+
+try:
+    import crepe  # type: ignore
+    _have_crepe = True
+except Exception:
+    crepe = None
+
+try:
+    import webrtcvad  # type: ignore
+    _have_webrtcvad = True
+except Exception:
+    webrtcvad = None
+
+
+# ---------------------------
+# Streamlit config & helpers
+# ---------------------------
 st.set_page_config(
     page_title="Patent #1 MVP - Voice Scaffolding & Latency Analyzer",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-# Helper for Query Params across Streamlit Versions
 def _get_query_params():
+    # Compatible with multiple Streamlit versions
+    if hasattr(st, "get_query_params"):
+        return st.get_query_params()
+    if hasattr(st, "experimental_get_query_params"):
+        return st.experimental_get_query_params()
     if hasattr(st, "query_params"):
         return st.query_params
-    elif hasattr(st, "experimental_get_query_params"):
-        return st.experimental_get_query_params()
     return {}
 
-def _set_query_params(params_dict=None):
-    if params_dict is None:
-        params_dict = {}
-    if hasattr(st, "query_params"):
-        st.query_params.clear()
-        for k, v in params_dict.items():
-            st.query_params[k] = v
+def _set_query_params(params: Optional[dict] = None):
+    if params is None:
+        # Clear query params if supported
+        if hasattr(st, "set_query_params"):
+            try:
+                st.set_query_params()
+            except TypeError:
+                st.set_query_params(**{})
+        elif hasattr(st, "experimental_set_query_params"):
+            try:
+                st.experimental_set_query_params()
+            except TypeError:
+                st.experimental_set_query_params(**{})
+        return
+    if hasattr(st, "set_query_params"):
+        st.set_query_params(**params)
     elif hasattr(st, "experimental_set_query_params"):
-        st.experimental_set_query_params(**params_dict)
+        st.experimental_set_query_params(**params)
 
-# Safe Rerun helper
 def _safe_rerun():
-    if hasattr(st, "rerun"):
-        st.rerun()
-    elif hasattr(st, "experimental_rerun"):
+    # Prefer experimental_rerun
+    if hasattr(st, "experimental_rerun"):
         st.experimental_rerun()
+    elif hasattr(st, "rerun"):
+        st.rerun()
 
 
-# ==========================================
-# 1. OPTIONAL LIBRARIES (FALLBACK IMPLEMENTATIONS)
-# ==========================================
-try:
-    import webrtcvad
-    HAS_WEBRTCVAD = True
-except ImportError:
-    HAS_WEBRTCVAD = False
-
-try:
-    import pydub
-    HAS_PYDUB = True
-except ImportError:
-    HAS_PYDUB = False
-
-try:
-    import librosa
-    HAS_LIBROSA = True
-except ImportError:
-    HAS_LIBROSA = False
-
-
-# ==========================================
-# 2. AUDIO PROCESSING & DSP CORE LOGIC
-# ==========================================
-def parse_wav_bytes(audio_bytes):
+# ---------------------------
+# Audio conversion helper
+# ---------------------------
+def _ensure_wav_bytes(raw_bytes: bytes) -> Optional[bytes]:
     """
-    Python 표준 wave 라이브러리를 사용해 WAV 바이너리에서 PCM 샘플을 추출합니다.
+    If raw_bytes already a RIFF/WAVE, return it. Otherwise try pydub (ffmpeg)
+    or system ffmpeg to convert to PCM WAV bytes.
     """
-    with wave.open(BytesIO(audio_bytes), 'rb') as wf:
+    try:
+        if raw_bytes[:4] == b"RIFF" and b"WAVE" in raw_bytes[:12]:
+            return raw_bytes
+    except Exception:
+        pass
+
+    # Try pydub (uses ffmpeg)
+    if _have_pydub:
+        try:
+            seg = AudioSegment.from_file(io.BytesIO(raw_bytes))
+            out = BytesIO()
+            seg.export(out, format="wav")
+            return out.getvalue()
+        except Exception:
+            pass
+
+    # Try imageio_ffmpeg-provided ffmpeg or system ffmpeg
+    ffmpeg_exe = None
+    if _iioffmpeg is not None:
+        try:
+            ffmpeg_exe = _iioffmpeg.get_ffmpeg_exe()
+        except Exception:
+            ffmpeg_exe = None
+    if ffmpeg_exe is None:
+        ffmpeg_exe = shutil.which("ffmpeg")
+
+    if ffmpeg_exe:
+        try:
+            proc = subprocess.run(
+                [ffmpeg_exe, "-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-f", "wav", "pipe:1"],
+                input=raw_bytes,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+            return proc.stdout
+        except Exception:
+            return None
+
+    return None
+
+
+# ---------------------------
+# WAV parsing and DSP
+# ---------------------------
+def parse_wav_bytes(wav_bytes: bytes) -> Tuple[np.ndarray, int]:
+    """
+    Parse PCM WAV bytes into float32 numpy mono array (-1..1) and sample rate.
+    Expects PCM WAV data (16-bit or 8-bit).
+    """
+    with wave.open(BytesIO(wav_bytes), "rb") as wf:
         n_channels = wf.getnchannels()
         sampwidth = wf.getsampwidth()
         framerate = wf.getframerate()
         n_frames = wf.getnframes()
         raw_frames = wf.readframes(n_frames)
-    
-    # 16-bit PCM (2 bytes per sample) 기준 처리
+
+    if n_frames == 0 or framerate == 0:
+        return np.array([], dtype=np.float32), framerate
+
     if sampwidth == 2:
         fmt = f"<{n_frames * n_channels}h"
-        samples = np.array(struct.unpack(fmt, raw_frames), dtype=np.float32) / 32768.0
+        try:
+            samples = np.array(struct.unpack(fmt, raw_frames), dtype=np.float32) / 32768.0
+        except struct.error:
+            # fallback: view as int16
+            samples = np.frombuffer(raw_frames, dtype=np.int16).astype(np.float32) / 32768.0
     elif sampwidth == 1:
-        # 8-bit unsigned
         fmt = f"<{n_frames * n_channels}B"
-        samples = (np.array(struct.unpack(fmt, raw_frames), dtype=np.float32) - 128.0) / 128.0
+        try:
+            usamps = np.array(struct.unpack(fmt, raw_frames), dtype=np.float32)
+        except struct.error:
+            usamps = np.frombuffer(raw_frames, dtype=np.uint8).astype(np.float32)
+        samples = (usamps - 128.0) / 128.0
     else:
-        # 기타 sample width일 경우 float 변환
-        samples = np.frombuffer(raw_frames, dtype=np.int16).astype(np.float32) / 32768.0
+        # Try interpreting as int16 fallback
+        try:
+            samples = np.frombuffer(raw_frames, dtype=np.int16).astype(np.float32) / 32768.0
+        except Exception:
+            samples = np.array([], dtype=np.float32)
 
-    # 스테레오일 경우 모노로 변환
-    if n_channels > 1:
-        samples = samples.reshape(-1, n_channels).mean(axis=1)
+    if n_channels > 1 and samples.size:
+        try:
+            samples = samples.reshape(-1, n_channels).mean(axis=1)
+        except Exception:
+            # if reshape fails, leave as-is
+            pass
 
     return samples, framerate
 
 
-def compute_rms(samples):
-    """RMS (Root Mean Square) 에너지 계산"""
-    if len(samples) == 0:
+def compute_rms(samples: np.ndarray) -> float:
+    if samples.size == 0:
         return 0.0
-    return math.sqrt(np.mean(samples ** 2))
+    return float(np.sqrt(np.mean(samples ** 2) + 1e-12))
 
 
-def compute_zcr(samples):
-    """Zero Crossing Rate (영교차율) 계산"""
-    if len(samples) < 2:
+def compute_zcr(samples: np.ndarray) -> float:
+    if samples.size < 2:
         return 0.0
-    zero_crossings = np.diff(np.signbit(samples))
-    return np.sum(zero_crossings != 0) / (len(samples) - 1)
+    z = np.sum(np.abs(np.diff(np.sign(samples)))) / 2.0
+    return float(z / max(1, samples.size - 1))
 
 
-def compute_snr(samples):
-    """간이 Signal-to-Noise Ratio (SNR, dB) 추정"""
+def compute_snr(samples: np.ndarray) -> float:
     rms_total = compute_rms(samples)
     if rms_total < 1e-6:
         return 0.0
-    # 하위 10% 에너지를 Noise Floor로 추정
-    sorted_abs = np.sort(np.abs(samples))
-    noise_floor = np.mean(sorted_abs[:max(1, int(len(sorted_abs) * 0.1))])
-    if noise_floor < 1e-6:
-        noise_floor = 1e-6
-    snr_db = 20 * math.log10(rms_total / noise_floor)
-    return max(0.0, snr_db)
+    se = np.sort(np.abs(samples))
+    bottom = np.mean(se[: max(1, int(len(se) * 0.1))])
+    if bottom < 1e-6:
+        bottom = 1e-6
+    snr_db = 20.0 * math.log10(rms_total / bottom)
+    return float(max(0.0, snr_db))
 
 
-def estimate_pitch_autocorr(samples, sr):
-    """
-    자기상관함수(Autocorrelation) 기반의 피치(F0) 추정 알고리즘 (Fallback)
-    """
-    if len(samples) < 256:
+def estimate_pitch_autocorr(samples: np.ndarray, sr: int) -> float:
+    if samples.size < 256:
         return 0.0
-    
-    # Autocorrelation via FFT
     n = len(samples)
-    f = np.fft.fft(samples, n=2*n)
+    # zero-mean the signal for autocorr
+    x = samples - np.mean(samples)
+    # FFT-based autocorrelation
+    f = np.fft.fft(x, n=2 * n)
     power = np.abs(f) ** 2
     autocorr = np.fft.ifft(power).real[:n]
-    
-    # 50Hz ~ 400Hz 음성 피치 범위 검색
-    min_lag = int(sr / 400)
-    max_lag = int(sr / 50)
-    
-    if max_lag >= len(autocorr) or min_lag >= max_lag:
+    if autocorr.size == 0 or autocorr[0] == 0:
         return 0.0
-        
-    peak_idx = min_lag + np.argmax(autocorr[min_lag:max_lag])
-    if autocorr[0] == 0:
+    min_lag = max(1, int(sr / 400))
+    max_lag = min(len(autocorr) - 1, int(sr / 50))
+    if min_lag >= max_lag:
         return 0.0
-        
-    reliability = autocorr[peak_idx] / autocorr[0]
-    if reliability > 0.2:
+    segment = autocorr[min_lag : max_lag + 1]
+    if segment.size == 0:
+        return 0.0
+    peak_rel = int(np.argmax(segment))
+    peak_idx = min_lag + peak_rel
+    reliability = float(autocorr[peak_idx] / (autocorr[0] + 1e-12))
+    if reliability > 0.2 and peak_idx > 0:
         return float(sr / peak_idx)
     return 0.0
 
 
-def fallback_vad(samples, sr, frame_duration_ms=30, energy_threshold=0.015):
-    """
-    WebRTCVAD 미설치 시 작동하는 자체 RMS 에너지 기반 VAD (Voice Activity Detection)
-    """
+def fallback_vad(samples: np.ndarray, sr: int, frame_duration_ms: int = 30, energy_threshold: float = 0.015) -> np.ndarray:
     frame_size = int(sr * (frame_duration_ms / 1000.0))
+    if frame_size <= 0:
+        return np.array([], dtype=int)
     voicing = []
-    
-    for i in range(0, len(samples) - frame_size, frame_size):
-        frame = samples[i:i + frame_size]
+    for i in range(0, len(samples), frame_size):
+        frame = samples[i : i + frame_size]
+        if frame.size == 0:
+            continue
         rms = compute_rms(frame)
         voicing.append(1 if rms > energy_threshold else 0)
-        
-    return np.array(voicing)
+    return np.array(voicing, dtype=int)
 
 
-def analyze_audio_bytes(audio_bytes):
+# ---------------------------
+# Analyze audio bytes
+# ---------------------------
+def analyze_audio_bytes(raw_audio_bytes: bytes) -> Dict:
     """
-    음성 바이너리를 분석하여 Latency, Pitch, VAD, 음향 지표를 통합 추출하는 메인 함수
+    Accept raw audio bytes (could be webm/mp3/wav). Convert to WAV PCM if needed,
+    then parse and compute metrics.
     """
     try:
-        samples, sr = parse_wav_bytes(audio_bytes)
+        wav_bytes = _ensure_wav_bytes(raw_audio_bytes)
+        if wav_bytes is None:
+            return {"error": "Failed to convert input to WAV. Install ffmpeg and pydub or imageio-ffmpeg."}
+        samples, sr = parse_wav_bytes(wav_bytes)
     except Exception as e:
-        return {"error": f"WAV 파일 파싱 실패: {str(e)}"}
+        return {"error": f"WAV parsing failed: {e}"}
 
-    duration_sec = len(samples) / sr if sr > 0 else 0
+    duration_sec = float(len(samples) / sr) if sr > 0 else 0.0
     total_rms = compute_rms(samples)
     zcr = compute_zcr(samples)
     snr_db = compute_snr(samples)
 
-    # 1. Voice Activity Detection (VAD) 및 Latency 계산
-    voicing = fallback_vad(samples, sr)
-    frame_duration_ms = 30
-    frame_size_sec = frame_duration_ms / 1000.0
-    
-    # 첫 발화(Speech Start) 지점 감지 -> Latency 추정
-    first_speech_frame = np.argmax(voicing == 1) if np.any(voicing == 1) else -1
-    speech_latency_ms = (first_speech_frame * frame_size_sec * 1000) if first_speech_frame >= 0 else 0.0
-
-    # 2. Pitch 추정
-    if HAS_LIBROSA:
+    # VAD
+    if _have_webrtcvad:
         try:
-            f0, _, _ = librosa.pyin(samples, fmin=50, fmax=400, sr=sr)
-            valid_f0 = f0[~np.isnan(f0)]
-            avg_pitch = float(np.mean(valid_f0)) if len(valid_f0) > 0 else 0.0
-        except:
+            # convert to 16-bit mono PCM for webrtcvad
+            import array
+            int16 = (samples * 32767.0).astype(np.int16)
+            pcm_bytes = int16.tobytes()
+            vad = webrtcvad.Vad(2)
+            frame_ms = 30
+            bytes_per_frame = int(sr * frame_ms / 1000.0) * 2
+            frames = []
+            for i in range(0, len(pcm_bytes), bytes_per_frame):
+                chunk = pcm_bytes[i : i + bytes_per_frame]
+                if len(chunk) < bytes_per_frame:
+                    break
+                frames.append(1 if vad.is_speech(chunk, sr) else 0)
+            voicing = np.array(frames, dtype=int)
+        except Exception:
+            voicing = fallback_vad(samples, sr)
+    else:
+        voicing = fallback_vad(samples, sr)
+
+    # Latency: first speech frame index
+    frame_duration_ms = 30
+    first_idx = int(np.argmax(voicing == 1)) if np.any(voicing == 1) else -1
+    latency_ms = float(first_idx * frame_duration_ms) if first_idx >= 0 else 0.0
+
+    # Pitch
+    if _have_librosa:
+        try:
+            f0, _, _ = librosa.pyin(samples.astype(np.float32), fmin=50, fmax=400, sr=sr)
+            valid = f0[~np.isnan(f0)]
+            avg_pitch = float(np.mean(valid)) if valid.size > 0 else estimate_pitch_autocorr(samples, sr)
+        except Exception:
             avg_pitch = estimate_pitch_autocorr(samples, sr)
     else:
         avg_pitch = estimate_pitch_autocorr(samples, sr)
 
     return {
         "duration_sec": round(duration_sec, 2),
-        "total_rms": round(total_rms, 4),
-        "zcr": round(zcr, 4),
+        "total_rms": round(total_rms, 6),
+        "zcr": round(zcr, 6),
         "snr_db": round(snr_db, 2),
-        "latency_ms": round(speech_latency_ms, 1),
+        "latency_ms": round(latency_ms, 1),
         "avg_pitch_hz": round(avg_pitch, 1),
         "sample_rate": sr,
-        "num_samples": len(samples),
-        "voicing_frames": voicing.tolist()
+        "num_samples": samples.size,
+        "voicing_frames": voicing.tolist(),
     }
 
 
-# ==========================================
-# 3. HTML5 JS RECORDING WEB COMPONENT
-# ==========================================
-def render_html5_recorder():
-    """
-    브라우저 표준 MediaRecorder API를 통해 마이크 음성을 녹음하고,
-    Base64 변환 후 Streamlit URL Parameter로 전송하는 HTML/JS 컴포넌트
-    """
-    html_code = """
-    <div style="border: 2px dashed #4A90E2; padding: 20px; border-radius: 12px; text-align: center; background-color: #F8FAFC;">
-        <h4 style="margin-top:0; color: #1E293B;">🎙️ Web Audio Real-time Recorder</h4>
-        <p style="font-size: 13px; color: #64748B;">버튼을 누르고 영어 문장을 발화하세요. (완료 시 자동 분석)</p>
-        
-        <button id="startBtn" onclick="startRecording()" style="padding: 10px 20px; font-weight: bold; background-color: #22C55E; color: white; border: none; border-radius: 6px; cursor: pointer; margin-right: 10px;">
-            🔴 녹음 시작
-        </button>
-        <button id="stopBtn" onclick="stopRecording()" disabled style="padding: 10px 20px; font-weight: bold; background-color: #EF4444; color: white; border: none; border-radius: 6px; cursor: pointer;">
-            ⏹️ 녹음 중지
-        </button>
-        
-        <div id="status" style="margin-top: 12px; font-weight: bold; color: #3B82F6;">대기 중...</div>
-    </div>
+# ---------------------------
+# Recorder HTML/JS (component)
+# ---------------------------
+def render_html_recorder(height: int = 240):
+    html = """
+<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; text-align: center; padding: 12px; border: 1px solid #cbd5e1; border-radius: 12px; background: #f8fafc;">
+  <div style="margin-bottom:8px;">
+    <div id="status" style="font-size:14px;color:#64748b;">대기 중...</div>
+  </div>
+  <div style="display:flex;gap:8px;justify-content:center;">
+    <button id="startBtn" style="background:#16a34a;color:white;padding:8px 14px;border-radius:8px;">🔴 녹음 시작</button>
+    <button id="stopBtn" disabled style="background:#ef4444;color:#ffffff;padding:8px 14px;border-radius:8px;cursor:not-allowed;">⏹️ 녹음 정지</button>
+  </div>
+  <div style="margin-top:8px;font-size:12px;color:#475569;">주의: URL 전송 방식은 긴 녹음에 실패할 수 있습니다. 짧은 문장(수초) 권장.</div>
+</div>
 
-    <script>
-        let mediaRecorder;
-        let audioChunks = [];
+<script>
+let mediaRecorder = null;
+let localStream = null;
+let chunks = [];
 
-        async function startRecording() {
-            audioChunks = [];
-            document.getElementById("status").innerText = "🎙️ 음성 녹음 중...";
-            document.getElementById("startBtn").disabled = true;
-            document.getElementById("stopBtn").disabled = false;
+const startBtn = document.getElementById('startBtn');
+const stopBtn = document.getElementById('stopBtn');
+const status = document.getElementById('status');
 
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                mediaRecorder = new MediaRecorder(stream);
-                
-                mediaRecorder.ondataavailable = event => {
-                    if (event.data.size > 0) {
-                        audioChunks.push(event.data);
-                    }
-                };
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.style.display = 'none';
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); document.body.removeChild(a); }, 1000);
+}
 
-                mediaRecorder.onstop = async () => {
-                    document.getElementById("status").innerText = "⚙️ 음성 데이터 처리 및 서버 전송 중...";
-                    const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
-                    
-                    const reader = new FileReader();
-                    reader.readAsDataURL(audioBlob);
-                    reader.onloadend = function () {
-                        const base64Audio = reader.result;
-                        const encoded = encodeURIComponent(base64Audio);
-                        
-                        // Streamlit Query Parameter를 통해 인코딩된 바이너리 전송
-                        const url = new URL(window.parent.location.href);
-                        url.searchParams.set("rec_b64", encoded);
-                        window.parent.location.href = url.toString();
-                    };
-                };
+startBtn.onclick = async () => {
+  chunks = [];
+  status.innerText = "🎙️ 녹음 중...";
+  startBtn.disabled = true;
+  stopBtn.disabled = false;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    localStream = stream;
+    try {
+      if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm')) {
+        mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      } else {
+        mediaRecorder = new MediaRecorder(stream);
+      }
+    } catch (err) {
+      // fallback
+      mediaRecorder = new MediaRecorder(stream);
+    }
 
-                mediaRecorder.start();
-            } catch (err) {
-                document.getElementById("status").innerText = "❌ 마이크 접근 권한 실패: " + err;
-                document.getElementById("startBtn").disabled = false;
-                document.getElementById("stopBtn").disabled = true;
-            }
+    mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunks.push(e.data); };
+
+    mediaRecorder.onstop = () => {
+      status.innerText = "⚙️ 데이터 처리 중...";
+      const blob = new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+      const reader = new FileReader();
+      reader.readAsDataURL(blob);
+      reader.onloadend = () => {
+        const dataUrl = reader.result;
+        try {
+          const url = new URL(window.parent.location.href);
+          // set data URL directly; URLSearchParams will encode
+          url.searchParams.set('rec_b64', dataUrl);
+          try {
+            window.parent.location.replace(url.toString());
+            return;
+          } catch (err) {}
+          try {
+            window.top.location.replace(url.toString());
+            return;
+          } catch (err) {}
+          // final fallback: download file
+          downloadBlob(blob, 'recording.webm');
+          status.innerText = "녹음 파일을 다운로드했습니다. 업로드 기능을 사용하세요.";
+        } catch (e) {
+          downloadBlob(blob, 'recording.webm');
+          status.innerText = "오류 발생 — 파일을 다운로드했습니다.";
         }
+      };
+      // release stream
+      try { if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; } } catch (e) {}
+      stopBtn.disabled = true;
+      startBtn.disabled = false;
+    };
 
-        function stopRecording() {
-            if (mediaRecorder && mediaRecorder.state !== "inactive") {
-                mediaRecorder.stop();
-                mediaRecorder.stream.getTracks().forEach(track => track.stop());
-            }
-            document.getElementById("startBtn").disabled = false;
-            document.getElementById("stopBtn").disabled = true;
-        }
-    </script>
-    """
-    st.components.v1.html(html_code, height=180)
+    mediaRecorder.start();
+  } catch (err) {
+    const name = err && err.name ? err.name : '';
+    if (name === 'NotAllowedError' || name === 'SecurityError' || name === 'PermissionDeniedError') {
+      status.innerText = "❌ 마이크 권한이 필요합니다. 브라우저 설정에서 권한을 허용하세요.";
+    } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+      status.innerText = "❌ 마이크를 찾을 수 없습니다. 장치 연결을 확인하세요.";
+    } else {
+      status.innerText = "❌ 녹음을 시작할 수 없습니다: " + (err && err.message ? err.message : String(err));
+      console.info("Recorder error:", err);
+    }
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+  }
+};
+
+stopBtn.onclick = () => {
+  try {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      mediaRecorder.stop();
+    }
+    if (localStream) {
+      try { localStream.getTracks().forEach(t => t.stop()); } catch (_) {}
+      localStream = null;
+    } else if (mediaRecorder && mediaRecorder.stream) {
+      try { mediaRecorder.stream.getTracks().forEach(t => t.stop()); } catch (_) {}
+    }
+  } catch (e) {
+    console.warn("Stop error:", e);
+  } finally {
+    stopBtn.disabled = true;
+    startBtn.disabled = false;
+  }
+};
+</script>
+"""
+    components.html(html, height=height, scrolling=False)
 
 
-# ==========================================
-# 4. STREAMLIT UI & STATE MANAGEMENT
-# ==========================================
-
-# Session State 초기화
+# ---------------------------
+# Streamlit UI & state
+# ---------------------------
 if "recorded_audio_bytes" not in st.session_state:
     st.session_state.recorded_audio_bytes = None
 if "analysis_data" not in st.session_state:
@@ -312,80 +474,78 @@ if "analysis_data" not in st.session_state:
 if "last_error_msg" not in st.session_state:
     st.session_state.last_error_msg = None
 
-
-# 🌟 [수정 핵심 반영 지점] Query Parameter 데이터 수신 및 안전한 URL Clean Up & Rerun
+# Handle incoming rec_b64 query param
 query_params = _get_query_params()
 if "rec_b64" in query_params:
     try:
         raw_b64 = query_params["rec_b64"]
         if isinstance(raw_b64, (list, tuple)):
             raw_b64 = raw_b64[0]
-        
         raw_b64 = unquote_plus(raw_b64)
         if raw_b64.startswith("data:"):
             _, b64 = raw_b64.split(",", 1)
         else:
             b64 = raw_b64
-            
-        audio_bytes = base64.b64decode(b64)
-        st.session_state.recorded_audio_bytes = audio_bytes
-        st.session_state.analysis_data = analyze_audio_bytes(audio_bytes)
-        st.session_state.last_error_msg = None
+        raw_bytes = base64.b64decode(b64)
+        wav_bytes = _ensure_wav_bytes(raw_bytes)
+        if wav_bytes is None:
+            st.session_state.last_error_msg = "오디오 포맷 변환 실패: 서버에서 WAV로 변환하지 못했습니다. ffmpeg/pydub 필요."
+            st.session_state.analysis_data = {"error": "Conversion to WAV failed"}
+            st.session_state.recorded_audio_bytes = None
+        else:
+            st.session_state.recorded_audio_bytes = wav_bytes
+            st.session_state.analysis_data = analyze_audio_bytes(wav_bytes)
+            st.session_state.last_error_msg = None
     except Exception as e:
         st.session_state.last_error_msg = f"음성 데이터 디코딩 실패: {e}"
-    
-    # 주소창을 즉시 깨끗하게 비우고 화면을 리프레시하여 로딩 멈춤 방지
-    _set_query_params({})
+    # clear query params and rerun to avoid reprocessing
+    _set_query_params(None)
     _safe_rerun()
 
-
-# --- HEADER & SIDEBAR ---
+# --- Header and sidebar ---
 st.title("🛡️ 특허 1호 MVP: 음성 Latency 분석 및 자동 역번역 비계 튜터")
 st.caption("AI-Powered Voice Scaffolding & Real-time Acoustic Latency Analyzer")
 
 st.sidebar.header("⚙️ 시스템 환경 모니터링")
 st.sidebar.markdown(f"""
-* **webrtcvad:** `{'✅ 사용 가능' if HAS_WEBRTCVAD else '⚠️ Fallback 모드 (RMS 사용)'}`
-* **pydub:** `{'✅ 사용 가능' if HAS_PYDUB else '⚠️ 표준 wave 모듈 동작'}`
-* **librosa:** `{'✅ 사용 가능' if HAS_LIBROSA else '⚠️ Fallback 모드 (Autocorr 사용)'}`
+* **pydub:** `{'✅ 사용 가능' if _have_pydub else '⚠️ 미설치 - 일부 포맷 변환 제한'}`
+* **imageio-ffmpeg:** `{'✅ 사용 가능' if _have_imageio_ffmpeg else '⚠️ 미설치 (시스템 ffmpeg 권장)'}`
+* **librosa:** `{'✅ 사용 가능' if _have_librosa else '⚠️ 미설치 (Autocorr fallback)'}`
+* **webrtcvad:** `{'✅ 사용 가능' if _have_webrtcvad else '⚠️ 미설치 (RMS fallback)'}`
 """)
 st.sidebar.divider()
-st.sidebar.subheader("💡 학습 가이드")
-st.sidebar.info("""
-1. 화면 중앙의 마이크를 통해 **영어 제안/대답**을 음성으로 녹음하세요.
-2. 시스템이 **발화 반응 속도(Latency)**와 **음향 지표**를 실시간 분석합니다.
-3. 역번역 비계(Scaffolding) 엔진이 **어체 및 어원 힌트**를 자동 제시합니다.
-""")
+st.sidebar.subheader("💡 설치 권장")
+st.sidebar.info("pip install -r requirements.txt  (필수)  필요시 requirements-optional.txt 참고")
 
-# 에러 메시지 표시
 if st.session_state.last_error_msg:
     st.error(st.session_state.last_error_msg)
 
-
-# --- MAIN CONTENT AREA ---
+# Main layout
 col_rec, col_scaff = st.columns([1, 1])
 
 with col_rec:
     st.subheader("1. 실시간 음성 수신 및 Latency 분석")
-    render_html5_recorder()
-    
+    render_html_recorder(260)
+
     st.write("---")
-    st.write("📁 **또는 테스트용 WAV 파일 직접 업로드**")
-    uploaded_file = st.file_uploader("WAV 파일을 선택하세요", type=["wav"])
+    st.write("📁 또는 테스트용 파일 업로드 (권장: WAV)")
+    uploaded_file = st.file_uploader("WAV / WebM / OGG / MP3 파일 업로드", type=["wav", "webm", "ogg", "mp3", "m4a"])
     if uploaded_file is not None:
         file_bytes = uploaded_file.read()
         if st.button("업로드 파일 분석 실행", use_container_width=True):
-            st.session_state.recorded_audio_bytes = file_bytes
-            st.session_state.analysis_data = analyze_audio_bytes(file_bytes)
-            _safe_rerun()
+            wav_bytes = _ensure_wav_bytes(file_bytes)
+            if wav_bytes is None:
+                st.error("업로드한 파일을 WAV로 변환하지 못했습니다. ffmpeg/pydub가 필요합니다.")
+            else:
+                st.session_state.recorded_audio_bytes = wav_bytes
+                st.session_state.analysis_data = analyze_audio_bytes(wav_bytes)
+                _safe_rerun()
 
 with col_scaff:
     st.subheader("2. AI 자동 역번역 비계 (Scaffolding)")
-    
     target_sentence = "We need to accelerate our business strategy to expand market share."
-    st.markdown(f"**🎯 목표 발화 (Target Sentence):**")
+    st.markdown("**🎯 목표 발화 (Target Sentence):**")
     st.blockquote(f"\"{target_sentence}\"")
-    
     st.markdown("**🔍 어원 및 어휘 비계(Scaffolding) 힌트:**")
     st.markdown("""
     * **Accelerate** (v.) [어원: *ac-* (향하여) + *celer* (빠른)] → *속도를 높이다, 가속하다*
@@ -393,32 +553,32 @@ with col_scaff:
     * **Expand** (v.) [어원: *ex-* (밖으로) + *pandere* (펼치다)] → *확장하다*
     """)
 
-
-# --- ANALYSIS RESULT DISPLAY ---
+# Analysis display
 if st.session_state.analysis_data:
     st.divider()
     st.subheader("📊 음성 실시간 분석 결과 (Patent Metrics)")
-    
     res = st.session_state.analysis_data
-    
-    if "error" in res:
+
+    if isinstance(res, dict) and "error" in res:
         st.error(res["error"])
-    else:
-        # 주요 지표 4개 메트릭 카드로 표시
+    elif isinstance(res, dict):
         m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("⏱️ 음성 Latency", f"{res['latency_ms']} ms")
-        m2.metric("🎵 평균 Pitch", f"{res['avg_pitch_hz']} Hz")
-        m3.metric("🔊 Signal RMS", f"{res['total_rms']}")
-        m4.metric("📡 SNR (신호대잡음비)", f"{res['snr_db']} dB")
-        m5.metric("⏳ 전체 총 길이", f"{res['duration_sec']} 초")
-        
-        # 음성 오디오 재생기
+        m1.metric("⏱️ 음성 Latency", f"{res.get('latency_ms', 0)} ms")
+        m2.metric("🎵 평균 Pitch", f"{res.get('avg_pitch_hz', 0)} Hz")
+        m3.metric("🔊 Signal RMS", f"{res.get('total_rms', 0)}")
+        m4.metric("📡 SNR (dB)", f"{res.get('snr_db', 0)} dB")
+        m5.metric("⏳ 전체 길이", f"{res.get('duration_sec', 0)} 초")
+
         if st.session_state.recorded_audio_bytes:
-            st.audio(st.session_state.recorded_audio_bytes, format="audio/wav")
-            
-        # VAD 프레임 그래프 시각화
+            try:
+                st.audio(st.session_state.recorded_audio_bytes, format="audio/wav")
+            except Exception:
+                st.audio(st.session_state.recorded_audio_bytes)
+
         st.markdown("##### 📈 Voice Activity Detection (VAD) 타임라인")
         voicing_data = res.get("voicing_frames", [])
         if voicing_data:
             st.line_chart(voicing_data, height=150)
-            st.caption("1.0: 음성 구간 (Voice Detected) | 0.0: 묵음/배경 소음 (Silence)")
+            st.caption("1: 음성 감지 | 0: 묵음")
+    else:
+        st.info("분석 결과가 없습니다. 좌측에서 녹음 또는 업로드 후 분석하세요.")
