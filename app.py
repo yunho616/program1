@@ -502,20 +502,16 @@ if "rec_b64" in query_params:
     _set_query_params(None)
     _safe_rerun()
 
-# --- Header and sidebar ---
+# --- Header ---
 st.title("🛡️ 특허 1호 MVP: 음성 Latency 분석 및 자동 역번역 비계 튜터")
 st.caption("AI-Powered Voice Scaffolding & Real-time Acoustic Latency Analyzer")
 
-st.sidebar.header("⚙️ 시스템 환경 모니터링")
-st.sidebar.markdown(f"""
-* **pydub:** `{'✅ 사용 가능' if _have_pydub else '⚠️ 미설치 - 일부 포맷 변환 제한'}`
-* **imageio-ffmpeg:** `{'✅ 사용 가능' if _have_imageio_ffmpeg else '⚠️ 미설치 (시스템 ffmpeg 권장)'}`
-* **librosa:** `{'✅ 사용 가능' if _have_librosa else '⚠️ 미설치 (Autocorr fallback)'}`
-* **webrtcvad:** `{'✅ 사용 가능' if _have_webrtcvad else '⚠️ 미설치 (RMS fallback)'}`
+# --- Sidebar (학습 안내용) ---
+st.sidebar.subheader("💡 학습 가이드")
+st.sidebar.info("""
+1. 마이크로 음성을 녹음하거나 오디오 파일을 업로드하세요.
+2. 음성의 반응 속도(Latency)와 피치(Pitch) 등 핵심 지표가 자동으로 분석됩니다.
 """)
-st.sidebar.divider()
-st.sidebar.subheader("💡 설치 권장")
-st.sidebar.info("pip install -r requirements.txt  (필수)  필요시 requirements-optional.txt 참고")
 
 if st.session_state.last_error_msg:
     st.error(st.session_state.last_error_msg)
