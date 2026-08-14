@@ -281,7 +281,7 @@ st.caption("AI-Powered Voice Scaffolding & Real-time Acoustic Latency Analyzer")
 st.sidebar.subheader("💡 학습 가이드")
 st.sidebar.info("""
 1. 마이크 녹음 버튼을 눌러 음성을 녹음하세요.
-2. '테스트용 사운드' 영역에서 파일을 업로드하거나 AI 음성을 들어볼 수 있습니다.
+2. '테스트용 사운드' 영역에서 AI 음성을 들어볼 수 있습니다.
 3. 우측 비계 영역에서 분석 결과와 어원 힌트가 출력됩니다.
 """)
 
@@ -314,19 +314,9 @@ with col_rec:
 
     st.write("---")
     
+    # 📁 테스트용 사운드 (AI 음성 듣기 기능만 남김)
     st.subheader("📁 테스트용 사운드")
     
-    uploaded_file = st.file_uploader("WAV / MP3 파일 업로드", type=["wav", "webm", "ogg", "mp3", "m4a"])
-    if uploaded_file is not None:
-        file_bytes = uploaded_file.read()
-        if st.button("업로드 파일 분석 실행", use_container_width=True):
-            wav_bytes = _ensure_wav_bytes(file_bytes)
-            if wav_bytes is not None:
-                st.session_state.recorded_audio_bytes = wav_bytes
-                st.session_state.analysis_data = analyze_audio_bytes(wav_bytes)
-                _safe_rerun()
-
-    # ✨ 브라우저 내장 API를 활용한 "안녕하세요" AI 목소리 재생 버튼
     if st.button("🔊 '안녕하세요' AI 목소리 듣기", use_container_width=True):
         st.session_state.trigger_tts = True
     else:
