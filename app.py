@@ -271,6 +271,8 @@ if "last_error_msg" not in st.session_state:
     st.session_state.last_error_msg = None
 if "user_transcript" not in st.session_state:
     st.session_state.user_transcript = "We need accelerate business strategy to expand."
+if "is_recording" not in st.session_state:
+    st.session_state.is_recording = False
 
 st.title("🛡️ 특허 1호 MVP: 음성 Latency 분석 및 자동 역번역 비계 튜터")
 st.caption("AI-Powered Voice Scaffolding & Real-time Acoustic Latency Analyzer")
@@ -295,38 +297,44 @@ with col_rec:
     
     st.subheader("1. 마이크 실시간 녹음")
     
-    # CSS 스타일 정의
+    # CSS 애니메이션 스타일
     st.markdown("""
         <style>
         .recording-badge {
             background-color: #ff4b4b;
             color: white;
-            padding: 4px 10px;
-            border-radius: 4px;
-            font-size: 13px;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 14px;
             font-weight: bold;
             display: inline-block;
-            margin-bottom: 6px;
-            animation: pulse 1.5s infinite;
+            margin-bottom: 10px;
+            animation: pulse 1.2s infinite;
         }
         @keyframes pulse {
-            0% { opacity: 1.0; }
-            50% { opacity: 0.4; }
-            100% { opacity: 1.0; }
+            0% { opacity: 1.0; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(0.98); }
+            100% { opacity: 1.0; transform: scale(1); }
         }
         </style>
     """, unsafe_allow_html=True)
 
-    # 오디오 입력 컴포넌트 렌더링 직전에 상태 감지를 위해 임시 변수 지정
-    # Streamlit audio_input은 녹음이 진행 중이거나 완료되어 객체가 생성되면 반환됨
-    audio_file = st.audio_input("마이크 녹음하기")
+    # 녹음 중 상태일 때만 뱃지 출력
+    if st.session_state.is_recording:
+        st.markdown('<div class="recording-badge">🔴 녹음 중... 마이크에 대고 말씀하세요</div>', unsafe_allow_html=True)
+        if st.button("⏹️ 녹음 중지 및 분석", type="primary", use_container_width=True):
+            st.session_state.is_recording = False
+            st.toast("녹음이 중지되었습니다.")
+            _safe_rerun()
+    else:
+        if st.button("🎙️ 녹음 시작", use_container_width=True):
+            st.session_state.is_recording = True
+            _safe_rerun()
 
-    # 녹음 중인지 판단 (audio_input이 활성화되어 데이터가 들어오거나 녹음 세션 중일 때)
-    # Streamlit 특성상 녹음 버튼을 누르는 순간 브라우저 인터페이스가 녹음 모드로 전환됨
-    # 여기서는 audio_file이 감지되었거나 사용자가 녹음 버튼을 조작할 때를 체크하기 위해 컴포넌트 위치 활용
-    
+    # 기본 st.audio_input 활용 영역 (대체 또는 병행)
+    audio_file = st.audio_input("마이크 직접 녹음기")
+
     if audio_file is not None:
-        # 녹음이 완료되어 결과물이 들어온 경우 "녹음 중" 뱃지를 숨기고 완료 표시
         raw_bytes = audio_file.read()
         if st.session_state.get("last_raw_bytes") != raw_bytes:
             st.session_state.last_raw_bytes = raw_bytes
@@ -382,6 +390,7 @@ with col_rec:
         st.session_state.recorded_audio_bytes = None
         st.session_state.analysis_data = None
         st.session_state.last_error_msg = None
+        st.session_state.is_recording = False
         st.toast("녹음 데이터와 분석 결과가 초기화되었습니다.")
         _safe_rerun()
 
