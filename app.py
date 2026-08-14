@@ -62,7 +62,6 @@ st.set_page_config(
 )
 
 def _get_query_params():
-    # Compatible with multiple Streamlit versions
     if hasattr(st, "get_query_params"):
         return st.get_query_params()
     if hasattr(st, "experimental_get_query_params"):
@@ -73,7 +72,6 @@ def _get_query_params():
 
 def _set_query_params(params: Optional[dict] = None):
     if params is None:
-        # Clear query params if supported
         if hasattr(st, "set_query_params"):
             try:
                 st.set_query_params()
@@ -91,7 +89,6 @@ def _set_query_params(params: Optional[dict] = None):
         st.experimental_set_query_params(**params)
 
 def _safe_rerun():
-    # Prefer experimental_rerun
     if hasattr(st, "experimental_rerun"):
         st.experimental_rerun()
     elif hasattr(st, "rerun"):
@@ -112,7 +109,6 @@ def _ensure_wav_bytes(raw_bytes: bytes) -> Optional[bytes]:
     except Exception:
         pass
 
-    # Try pydub (uses ffmpeg)
     if _have_pydub:
         try:
             seg = AudioSegment.from_file(io.BytesIO(raw_bytes))
@@ -122,7 +118,6 @@ def _ensure_wav_bytes(raw_bytes: bytes) -> Optional[bytes]:
         except Exception:
             pass
 
-    # Try imageio_ffmpeg-provided ffmpeg or system ffmpeg
     ffmpeg_exe = None
     if _iioffmpeg is not None:
         try:
@@ -152,10 +147,6 @@ def _ensure_wav_bytes(raw_bytes: bytes) -> Optional[bytes]:
 # WAV parsing and DSP
 # ---------------------------
 def parse_wav_bytes(wav_bytes: bytes) -> Tuple[np.ndarray, int]:
-    """
-    Parse PCM WAV bytes into float32 numpy mono array (-1..1) and sample rate.
-    Expects PCM WAV data (16-bit or 8-bit).
-    """
     with wave.open(BytesIO(wav_bytes), "rb") as wf:
         n_channels = wf.getnchannels()
         sampwidth = wf.getsampwidth()
@@ -171,7 +162,6 @@ def parse_wav_bytes(wav_bytes: bytes) -> Tuple[np.ndarray, int]:
         try:
             samples = np.array(struct.unpack(fmt, raw_frames), dtype=np.float32) / 32768.0
         except struct.error:
-            # fallback: view as int16
             samples = np.frombuffer(raw_frames, dtype=np.int16).astype(np.float32) / 32768.0
     elif sampwidth == 1:
         fmt = f"<{n_frames * n_channels}B"
@@ -181,7 +171,6 @@ def parse_wav_bytes(wav_bytes: bytes) -> Tuple[np.ndarray, int]:
             usamps = np.frombuffer(raw_frames, dtype=np.uint8).astype(np.float32)
         samples = (usamps - 128.0) / 128.0
     else:
-        # Try interpreting as int16 fallback
         try:
             samples = np.frombuffer(raw_frames, dtype=np.int16).astype(np.float32) / 32768.0
         except Exception:
@@ -191,7 +180,6 @@ def parse_wav_bytes(wav_bytes: bytes) -> Tuple[np.ndarray, int]:
         try:
             samples = samples.reshape(-1, n_channels).mean(axis=1)
         except Exception:
-            # if reshape fails, leave as-is
             pass
 
     return samples, framerate
@@ -226,9 +214,7 @@ def estimate_pitch_autocorr(samples: np.ndarray, sr: int) -> float:
     if samples.size < 256:
         return 0.0
     n = len(samples)
-    # zero-mean the signal for autocorr
     x = samples - np.mean(samples)
-    # FFT-based autocorrelation
     f = np.fft.fft(x, n=2 * n)
     power = np.abs(f) ** 2
     autocorr = np.fft.ifft(power).real[:n]
@@ -267,10 +253,6 @@ def fallback_vad(samples: np.ndarray, sr: int, frame_duration_ms: int = 30, ener
 # Analyze audio bytes
 # ---------------------------
 def analyze_audio_bytes(raw_audio_bytes: bytes) -> Dict:
-    """
-    Accept raw audio bytes (could be webm/mp3/wav). Convert to WAV PCM if needed,
-    then parse and compute metrics.
-    """
     try:
         wav_bytes = _ensure_wav_bytes(raw_audio_bytes)
         if wav_bytes is None:
@@ -284,10 +266,8 @@ def analyze_audio_bytes(raw_audio_bytes: bytes) -> Dict:
     zcr = compute_zcr(samples)
     snr_db = compute_snr(samples)
 
-    # VAD
     if _have_webrtcvad:
         try:
-            # convert to 16-bit mono PCM for webrtcvad
             import array
             int16 = (samples * 32767.0).astype(np.int16)
             pcm_bytes = int16.tobytes()
@@ -306,12 +286,10 @@ def analyze_audio_bytes(raw_audio_bytes: bytes) -> Dict:
     else:
         voicing = fallback_vad(samples, sr)
 
-    # Latency: first speech frame index
     frame_duration_ms = 30
     first_idx = int(np.argmax(voicing == 1)) if np.any(voicing == 1) else -1
     latency_ms = float(first_idx * frame_duration_ms) if first_idx >= 0 else 0.0
 
-    # Pitch
     if _have_librosa:
         try:
             f0, _, _ = librosa.pyin(samples.astype(np.float32), fmin=50, fmax=400, sr=sr)
@@ -336,7 +314,7 @@ def analyze_audio_bytes(raw_audio_bytes: bytes) -> Dict:
 
 
 # ---------------------------
-# Recorder HTML/JS (component)
+# Recorder HTML/JS (component - 수정됨)
 # ---------------------------
 def render_html_recorder(height: int = 240):
     html = """
@@ -345,8 +323,9 @@ def render_html_recorder(height: int = 240):
     <div id="status" style="font-size:14px;color:#64748b;">대기 중...</div>
   </div>
   <div style="display:flex;gap:8px;justify-content:center;">
-    <button id="startBtn" style="background:#16a34a;color:white;padding:8px 14px;border-radius:8px;">🔴 녹음 시작</button>
-    <button id="stopBtn" disabled style="background:#ef4444;color:#ffffff;padding:8px 14px;border-radius:8px;cursor:not-allowed;">⏹️ 녹음 정지</button>
+    <button id="startBtn" style="background:#16a34a;color:white;padding:8px 14px;border:none;border-radius:8px;cursor:pointer;">🔴 녹음 시작</button>
+    <!-- 수정 포인트: 초기 커서를 default로 설정하고 회색 계열 배경 지정 -->
+    <button id="stopBtn" disabled style="background:#94a3b8;color:#ffffff;padding:8px 14px;border:none;border-radius:8px;cursor:default;">⏹️ 녹음 정지</button>
   </div>
   <div style="margin-top:8px;font-size:12px;color:#475569;">주의: URL 전송 방식은 긴 녹음에 실패할 수 있습니다. 짧은 문장(수초) 권장.</div>
 </div>
@@ -375,7 +354,13 @@ startBtn.onclick = async () => {
   chunks = [];
   status.innerText = "🎙️ 녹음 중...";
   startBtn.disabled = true;
+  startBtn.style.cursor = "default";
+  
+  // 수정 포인트: 녹음 시작 시 정지 버튼 활성화 + 빨간색 스타일 + pointer 커서 전환
   stopBtn.disabled = false;
+  stopBtn.style.background = "#ef4444";
+  stopBtn.style.cursor = "pointer";
+
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     localStream = stream;
@@ -386,7 +371,6 @@ startBtn.onclick = async () => {
         mediaRecorder = new MediaRecorder(stream);
       }
     } catch (err) {
-      // fallback
       mediaRecorder = new MediaRecorder(stream);
     }
 
@@ -401,7 +385,6 @@ startBtn.onclick = async () => {
         const dataUrl = reader.result;
         try {
           const url = new URL(window.parent.location.href);
-          // set data URL directly; URLSearchParams will encode
           url.searchParams.set('rec_b64', dataUrl);
           try {
             window.parent.location.replace(url.toString());
@@ -411,7 +394,6 @@ startBtn.onclick = async () => {
             window.top.location.replace(url.toString());
             return;
           } catch (err) {}
-          // final fallback: download file
           downloadBlob(blob, 'recording.webm');
           status.innerText = "녹음 파일을 다운로드했습니다. 업로드 기능을 사용하세요.";
         } catch (e) {
@@ -419,10 +401,15 @@ startBtn.onclick = async () => {
           status.innerText = "오류 발생 — 파일을 다운로드했습니다.";
         }
       };
-      // release stream
       try { if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; } } catch (e) {}
+      
+      // 수정 포인트: 종료 시 정지 버튼 비활성화 및 스타일에 초기화
       stopBtn.disabled = true;
+      stopBtn.style.background = "#94a3b8";
+      stopBtn.style.cursor = "default";
+      
       startBtn.disabled = false;
+      startBtn.style.cursor = "pointer";
     };
 
     mediaRecorder.start();
@@ -437,7 +424,11 @@ startBtn.onclick = async () => {
       console.info("Recorder error:", err);
     }
     startBtn.disabled = false;
+    startBtn.style.cursor = "pointer";
+    
     stopBtn.disabled = true;
+    stopBtn.style.background = "#94a3b8";
+    stopBtn.style.cursor = "default";
   }
 };
 
@@ -456,7 +447,11 @@ stopBtn.onclick = () => {
     console.warn("Stop error:", e);
   } finally {
     stopBtn.disabled = true;
+    stopBtn.style.background = "#94a3b8";
+    stopBtn.style.cursor = "default";
+    
     startBtn.disabled = false;
+    startBtn.style.cursor = "pointer";
   }
 };
 </script>
@@ -498,7 +493,6 @@ if "rec_b64" in query_params:
             st.session_state.last_error_msg = None
     except Exception as e:
         st.session_state.last_error_msg = f"음성 데이터 디코딩 실패: {e}"
-    # clear query params and rerun to avoid reprocessing
     _set_query_params(None)
     _safe_rerun()
 
@@ -541,8 +535,6 @@ with col_scaff:
     st.subheader("2. AI 자동 역번역 비계 (Scaffolding)")
     target_sentence = "We need to accelerate our business strategy to expand market share."
     st.markdown("**🎯 목표 발화 (Target Sentence):**")
-    
-    # st.blockquote() 오류 수정 부분
     st.markdown(f"> \"{target_sentence}\"")
     
     st.markdown("**🔍 어원 및 어휘 비계(Scaffolding) 힌트:**")
