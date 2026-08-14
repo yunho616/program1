@@ -210,9 +210,6 @@ def fallback_vad(samples: np.ndarray, sr: int, frame_duration_ms: int = 30, ener
 
 
 def calculate_word_accuracy_details(target_text: str, user_text: str) -> Tuple[float, int, int]:
-    """
-    단어 단위 비교를 통해 정확한 단어 수, 전체 단어 수, 일치율(%), 틀린 단어 수를 계산합니다.
-    """
     target_words = target_text.strip().lower().split()
     user_words = user_text.strip().lower().split()
     
@@ -220,7 +217,6 @@ def calculate_word_accuracy_details(target_text: str, user_text: str) -> Tuple[f
     if total_words == 0:
         return 0.0, 0, 0
 
-    # SequenceMatcher를 사용해 일치하는 단어 개수 파악
     matcher = difflib.SequenceMatcher(None, target_words, user_words)
     matching_blocks = matcher.get_matching_blocks()
     
@@ -390,9 +386,14 @@ with col_scaff:
             wpm = 0
             cpm = 0
 
-        m1, m2 = st.columns(2)
+        # 정밀 단어 분석 기반 대본 일치율 및 틀린 단어 수 계산
+        accuracy, correct_cnt, wrong_cnt = calculate_word_accuracy_details(target_sentence, st.session_state.user_transcript)
+
+        # 메인 분석 지표 3개 분할 배치 (녹음 시간 / 속도(WPM/CPM) / 대본 일치율)
+        m1, m2, m3 = st.columns(3)
         m1.metric("⏱️ 녹음 시간", f"{duration_val:.1f} 초")
         m2.metric("속도 (WPM / CPM)", f"{wpm} / {cpm}")
+        m3.metric("🎯 대본 일치율", f"{accuracy}%")
 
         st.write("---")
         
@@ -404,10 +405,9 @@ with col_scaff:
         user_transcript = st.text_input("🗣️ 인식된 사용자 발화:", value=st.session_state.user_transcript)
         st.session_state.user_transcript = user_transcript
 
-        # 정밀 단어 분석 기반 대본 일치율 및 틀린 단어 수 계산
+        # 실시간 변경된 텍스트에 맞춰 일치율 및 틀린 단어 수 재계산 적용
         accuracy, correct_cnt, wrong_cnt = calculate_word_accuracy_details(target_sentence, user_transcript)
         
-        st.metric("🎯 대본 일치율 (Accuracy)", f"{accuracy}%")
         st.markdown(f"❌ **틀린 단어 수:** {wrong_cnt}개 (정확한 단어: {correct_cnt}개 / 전체: {len(target_sentence.split())}개)")
 
         # --- 단어 간 Latency 분석 (2.5초 초과 단어 검출) ---
