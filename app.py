@@ -11,7 +11,6 @@ from typing import List, Optional, Tuple, Dict
 
 import numpy as np
 import streamlit as st
-import streamlit.components.v1 as components
 
 # Optional libs detection
 _have_pydub = False
@@ -272,8 +271,6 @@ if "last_error_msg" not in st.session_state:
     st.session_state.last_error_msg = None
 if "user_transcript" not in st.session_state:
     st.session_state.user_transcript = "We need accelerate business strategy to expand."
-if "trigger_tts" not in st.session_state:
-    st.session_state.trigger_tts = False
 
 st.title("🛡️ 특허 1호 MVP: 음성 Latency 분석 및 자동 역번역 비계 튜터")
 st.caption("AI-Powered Voice Scaffolding & Real-time Acoustic Latency Analyzer")
@@ -281,8 +278,8 @@ st.caption("AI-Powered Voice Scaffolding & Real-time Acoustic Latency Analyzer")
 st.sidebar.subheader("💡 학습 가이드")
 st.sidebar.info("""
 1. 마이크 녹음 버튼을 눌러 음성을 녹음하세요.
-2. '🎙️ 테스트용 사운드'의 AI 목소리 듣기를 누르면 테스트용 분석 결과가 나타납니다.
-3. 우측 비계 영역에서 분석 결과와 어원 힌트가 출력됩니다.
+2. '🎙️ 테스트용 사운드'의 AI 목소리 생성 버튼을 누르면 테스트용 오디오와 분석 결과가 제공됩니다.
+3. 생성된 오디오 플레이어의 재생 버튼을 눌러 소리를 확인하세요.
 """)
 
 if st.session_state.last_error_msg:
@@ -314,51 +311,44 @@ with col_rec:
 
     st.write("---")
     
-    # 📁 변경된 텍스트: 🎙️ 테스트용 사운드
+    # 🎙️ 테스트용 사운드 영역
     st.subheader("🎙️ 테스트용 사운드")
     
-    if st.button("🔊 '안녕하세요' AI 목소리 듣기", use_container_width=True):
-        st.session_state.trigger_tts = True
+    if st.button("🔊 테스트용 AI 음성 및 분석 생성", use_container_width=True):
+        # 1초 길이의 깨끗한 오디오 톤(WAV) 데이터를 파이썬으로 직접 생성
+        sr = 16000
+        duration = 1.0
+        t = np.linspace(0, duration, int(sr * duration), endpoint=False)
+        audio_data = (32767 * 0.5 * np.sin(2 * np.pi * 440 * t)).astype(np.int16)
         
-        # 임의의 더미 WAV 바이트 생성 (1초짜리 무음 WAV 파일 구조)
-        dummy_io = BytesIO()
-        with wave.open(dummy_io, "wb") as wf:
+        wav_io = BytesIO()
+        with wave.open(wav_io, "wb") as wf:
             wf.setnchannels(1)
             wf.setsampwidth(2)
-            wf.setframerate(16000)
-            wf.writeframes(b"\x00" * 32000)
-        st.session_state.recorded_audio_bytes = dummy_io.getvalue()
-
-        # 임의의 분석 데이터 설정
+            wf.setframerate(sr)
+            wf.writeframes(audio_data.tobytes())
+        
+        # 세션에 오디오 바이트 및 임의 분석 데이터 저장
+        st.session_state.recorded_audio_bytes = wav_io.getvalue()
         st.session_state.analysis_data = {
             "duration_sec": 1.0,
             "total_rms": 0.0523,
             "zcr": 0.0812,
             "snr_db": 18.5,
             "latency_ms": 120.0,
-            "avg_pitch_hz": 215.4,
-            "sample_rate": 16000,
-            "num_samples": 16000,
-            "voicing_frames": [1, 1, 0, 1]
+            "avg_pitch_hz": 440.0,
+            "sample_rate": sr,
+            "num_samples": len(audio_data),
+            "voicing_frames": [1, 1, 1, 1]
         }
         st.session_state.user_transcript = "We need accelerate business strategy to expand."
-        st.toast("테스트용 임의 분석 데이터가 적용되었습니다!")
+        st.toast("테스트용 사운드와 분석 데이터가 생성되었습니다!")
         _safe_rerun()
-    else:
-        st.session_state.trigger_tts = False
 
-    if st.session_state.trigger_tts:
-        tts_html = """
-        <script>
-            if ('speechSynthesis' in window) {
-                const utterance = new SpeechSynthesisUtterance("안녕하세요");
-                utterance.lang = 'ko-KR';
-                utterance.rate = 1.0;
-                window.speechSynthesis.speak(utterance);
-            }
-        </script>
-        """
-        components.html(tts_html, height=0)
+    # 테스트 데이터가 생성되면 아래에 플레이어 노출 (사용자가 직접 누르면 확실하게 소리 재생됨)
+    if st.session_state.recorded_audio_bytes:
+        st.markdown("👇 **생성된 테스트 오디오 (재생 버튼을 누르세요):**")
+        st.audio(st.session_state.recorded_audio_bytes, format="audio/wav")
 
     st.write("---")
 
@@ -366,7 +356,6 @@ with col_rec:
         st.session_state.recorded_audio_bytes = None
         st.session_state.analysis_data = None
         st.session_state.last_error_msg = None
-        st.session_state.trigger_tts = False
         st.toast("녹음 데이터와 분석 결과가 초기화되었습니다.")
         _safe_rerun()
 
@@ -381,12 +370,6 @@ with col_scaff:
         m1.metric("⏱️ 음성 Latency", f"{res.get('latency_ms', 0)} ms")
         m2.metric("🎵 평균 Pitch", f"{res.get('avg_pitch_hz', 0)} Hz")
         m3.metric("📡 SNR (dB)", f"{res.get('snr_db', 0)} dB")
-
-        if st.session_state.recorded_audio_bytes:
-            try:
-                st.audio(st.session_state.recorded_audio_bytes, format="audio/wav")
-            except Exception:
-                st.audio(st.session_state.recorded_audio_bytes)
 
         st.write("---")
         user_transcript = st.text_input("🗣️ 인식된 사용자 발화:", value=st.session_state.user_transcript)
@@ -407,4 +390,4 @@ with col_scaff:
     elif st.session_state.analysis_data and "error" in st.session_state.analysis_data:
         st.error(st.session_state.analysis_data["error"])
     else:
-        st.info("👈 좌측에서 마이크로 음성을 녹음하거나 '테스트용 사운드' 버튼을 눌러 테스트해 보세요.")
+        st.info("👈 좌측에서 마이크로 음성을 녹음하거나 '테스트용 AI 음성 및 분석 생성' 버튼을 눌러보세요.")
