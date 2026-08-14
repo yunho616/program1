@@ -324,7 +324,7 @@ def analyze_audio_bytes(raw_audio_bytes: bytes) -> Dict:
 
 
 # ---------------------------
-# Recorder HTML/JS (component)
+# Recorder HTML/JS (component - 날짜 포맷 적용)
 # ---------------------------
 def render_html_recorder(height: int = 240):
     html = """
@@ -347,6 +347,15 @@ let chunks = [];
 const startBtn = document.getElementById('startBtn');
 const stopBtn = document.getElementById('stopBtn');
 const status = document.getElementById('status');
+
+// 현재 날짜(YYYYMMDD) 생성 함수
+function getTodayString() {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, '0');
+  const day = String(today.getDate()).padStart(2, '0');
+  return `${year}${month}${day}`;
+}
 
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
@@ -389,6 +398,11 @@ startBtn.onclick = async () => {
       const blob = new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' });
       const reader = new FileReader();
       reader.readAsDataURL(blob);
+      
+      // 파일명 설정: YYYYMMDD_record 1.webm
+      const dateStr = getTodayString();
+      const defaultFilename = `${dateStr}_record 1.webm`;
+
       reader.onloadend = () => {
         const dataUrl = reader.result;
         try {
@@ -402,10 +416,10 @@ startBtn.onclick = async () => {
             window.top.location.replace(url.toString());
             return;
           } catch (err) {}
-          downloadBlob(blob, 'recording.webm');
+          downloadBlob(blob, defaultFilename);
           status.innerText = "녹음 파일을 다운로드했습니다. 업로드 기능을 사용하세요.";
         } catch (e) {
-          downloadBlob(blob, 'recording.webm');
+          downloadBlob(blob, defaultFilename);
           status.innerText = "오류 발생 — 파일을 다운로드했습니다.";
         }
       };
@@ -550,7 +564,6 @@ with col_scaff:
     # 음성 데이터가 분석되었을 때만 처리 진행
     if st.session_state.analysis_data and "error" not in st.session_state.analysis_data:
         st.write("---")
-        # 실제 환경에서는 STT(Speech-to-Text) 결과물이 들어가는 부분입니다.
         user_transcript = st.text_input(
             "🗣️ 인식된 사용자 발화 (STT 결과 / 테스트 수정 가능):",
             value=st.session_state.user_transcript
@@ -563,7 +576,7 @@ with col_scaff:
         # 일치율 표시
         st.metric("🎯 대본 일치율 (Accuracy)", f"{accuracy}%")
 
-        # ⭐️ 75% 이하일 때만 어원 및 어휘 비계 힌트 출력 ⭐️
+        # 75% 이하일 때만 어원 및 어휘 비계 힌트 출력
         if accuracy <= 75.0:
             st.warning("⚠️ **발화 일치율이 75% 이하입니다.** 아래 어원 비계(Scaffolding) 힌트를 참고하여 다시 시도해보세요!")
             st.markdown("**🔍 어원 및 어휘 비계(Scaffolding) 힌트:**")
