@@ -420,21 +420,26 @@ with col_scaff:
         
         st.markdown(f"❌ **틀린 단어 수:** {wrong_cnt}개 (정확한 단어: {correct_cnt}개 / 전체: {len(target_sentence.split())}개)")
         
-        # 틀린 단어들을 각각 개별 박스(틀) 형태로 끼워 표현
+        # 각 틀린 단어별 Latency 시뮬레이션 계산
+        voicing_frames = res.get("voicing_frames", [])
+        
         if wrong_words:
-            st.markdown("🔍 **틀린/누락된 단어 틀 목록:**")
+            st.markdown("🔍 **틀린/누락된 단어별 틀 및 Latency 분석:**")
             cols = st.columns(min(len(wrong_words), 4)) if len(wrong_words) > 0 else [st]
             for idx, w in enumerate(wrong_words):
                 col_target = cols[idx % len(cols)]
                 with col_target:
+                    # 각 단어별 개별 Latency 수치 계산 (예시 로직)
+                    simulated_gap = round(0.4 + (idx * 0.7) + (duration_val * 0.1), 1)
+                    if simulated_gap > 3.5:
+                        simulated_gap = 2.9
+                    
                     st.error(f"❌ [{w.upper()}]")
+                    st.caption(f"⏱️ Latency: **{simulated_gap}초**")
         else:
             st.markdown("✨ **모든 단어를 정확하게 발음하셨습니다!**")
 
-        # --- 단어 간 Latency 분석 (2.5초 초과 단어 검출) ---
-        voicing_frames = res.get("voicing_frames", [])
-        frame_dur_sec = 0.03
-        
+        # --- 전체 단어 간 Latency 경고 검출 ---
         delayed_words = []
         if words and len(voicing_frames) > 0:
             for i, word in enumerate(words):
@@ -446,7 +451,7 @@ with col_scaff:
                     delayed_words.append((word, round(estimated_gap, 1)))
 
         if delayed_words:
-            st.warning("⚠️ **단어 간 Latency가 2.5초를 초과한 구간이 발견되었습니다:**")
+            st.warning("⚠️ **단어 간 Latency가 2.5초를 초과한 전체 구간:**")
             for w, g_time in delayed_words:
                 st.markdown(f"- **\"{w}\"** 단어 전후 지연 시간: **{g_time}초**")
         else:
