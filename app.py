@@ -248,7 +248,7 @@ def analyze_audio_bytes(raw_audio_bytes: bytes) -> Dict:
         avg_pitch = estimate_pitch_autocorr(samples, sr)
 
     return {
-        "duration_sec": round(duration_sec, 1),  # 0.1초 단위 반올림
+        "duration_sec": round(duration_sec, 1),
         "total_rms": round(total_rms, 6),
         "zcr": round(zcr, 6),
         "snr_db": round(snr_db, 2),
@@ -360,9 +360,25 @@ with col_scaff:
         res = st.session_state.analysis_data
         st.markdown("##### 📊 음성 데이터 분석 결과")
         
-        # 녹음 시간만 0.1초 단위(소수점 첫째 자리)로 표시
+        # 녹음 시간(0.1초 단위), WPM, CPM을 나란히 배치하기 위해 3개 컬럼 생성
         duration_val = res.get('duration_sec', 0.0)
-        st.metric("⏱️ 녹음 시간", f"{duration_val:.1f} 초")
+        
+        # 발화 텍스트 기반 WPM / CPM 대략적 계산
+        words = [w for w in st.session_state.user_transcript.split() if w.strip()]
+        num_words = len(words)
+        num_chars = len(st.session_state.user_transcript.replace(" ", ""))
+        
+        if duration_val > 0:
+            wpm = int((num_words / duration_val) * 60)
+            cpm = int((num_chars / duration_val) * 60)
+        else:
+            wpm = 0
+            cpm = 0
+
+        m1, m2, m3 = st.columns(3)
+        m1.metric("⏱️ 녹음 시간", f"{duration_val:.1f} 초")
+        m2.metric("WPM", f"{wpm}")
+        m3.metric("CPM", f"{cpm}")
 
         st.write("---")
         
