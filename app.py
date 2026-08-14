@@ -251,7 +251,6 @@ def fallback_vad(samples: np.ndarray, sr: int, frame_duration_ms: int = 30, ener
 # Text Similarity Helper
 # ---------------------------
 def calculate_accuracy(target_text: str, user_text: str) -> float:
-    """두 문장 간의 유사도(0.0 ~ 100.0%)를 계산합니다."""
     t_clean = target_text.strip().lower()
     u_clean = user_text.strip().lower()
     if not u_clean:
@@ -336,33 +335,6 @@ if "last_error_msg" not in st.session_state:
 if "user_transcript" not in st.session_state:
     st.session_state.user_transcript = "We need accelerate business strategy to expand."
 
-# Handle incoming rec_b64 query param (하위 호환성 유지)
-query_params = _get_query_params()
-if "rec_b64" in query_params:
-    try:
-        raw_b64 = query_params["rec_b64"]
-        if isinstance(raw_b64, (list, tuple)):
-            raw_b64 = raw_b64[0]
-        raw_b64 = unquote_plus(raw_b64)
-        if raw_b64.startswith("data:"):
-            _, b64 = raw_b64.split(",", 1)
-        else:
-            b64 = raw_b64
-        raw_bytes = base64.b64decode(b64)
-        wav_bytes = _ensure_wav_bytes(raw_bytes)
-        if wav_bytes is None:
-            st.session_state.last_error_msg = "오디오 포맷 변환 실패: 서버에서 WAV로 변환하지 못했습니다. ffmpeg/pydub 필요."
-            st.session_state.analysis_data = {"error": "Conversion to WAV failed"}
-            st.session_state.recorded_audio_bytes = None
-        else:
-            st.session_state.recorded_audio_bytes = wav_bytes
-            st.session_state.analysis_data = analyze_audio_bytes(wav_bytes)
-            st.session_state.last_error_msg = None
-    except Exception as e:
-        st.session_state.last_error_msg = f"음성 데이터 디코딩 실패: {e}"
-    _set_query_params(None)
-    _safe_rerun()
-
 # --- Header ---
 st.title("🛡️ 특허 1호 MVP: 음성 Latency 분석 및 자동 역번역 비계 튜터")
 st.caption("AI-Powered Voice Scaffolding & Real-time Acoustic Latency Analyzer")
@@ -390,11 +362,20 @@ with col_rec:
     
     st.subheader("1. 실시간 음성 수신")
     
-    # 🎙️ mic_recorder 컴포넌트로 용량/길이 제한 없는 녹음 구현
+    # 🔴 "녹음 시작"과 "⏹️ 녹음 정지" 버튼을 좌우 2개의 컬럼으로 분리 배치
+    rec_col1, rec_col2 = st.columns(2)
+    
+    with rec_col1:
+        st.markdown("**[녹음 시작]**")
+    with rec_col2:
+        st.markdown("**[녹음 정지]**")
+
+    # mic_recorder 컴포넌트를 호출하여 하단에 연동 (버튼명 커스텀 분리 형태)
     audio_data = mic_recorder(
-        start_prompt="🔴 녹음 시작",
-        stop_prompt="⏹️ 녹음 정지",
+        start_prompt="🔴 녹음 시작하기",
+        stop_prompt="⏹️ 녹음 완료/정지",
         key="mic_recorder",
+        use_container_width=True,
     )
 
     if audio_data and "bytes" in audio_data:
@@ -426,7 +407,6 @@ with col_rec:
 with col_scaff:
     st.subheader("2. AI 자동 역번역 비계 (Scaffolding)")
 
-    # 분석 데이터가 있는 경우, 분석 지표를 비계 영역 상단에 출력
     if st.session_state.analysis_data and "error" not in st.session_state.analysis_data:
         res = st.session_state.analysis_data
 
@@ -464,11 +444,9 @@ with col_scaff:
         )
         st.session_state.user_transcript = user_transcript
 
-        # 유사도(일치율) 계산
         accuracy = calculate_accuracy(target_sentence, user_transcript)
         st.metric("🎯 대본 일치율 (Accuracy)", f"{accuracy}%")
 
-        # 75% 이하일 때만 어원 및 어휘 비계 힌트 출력
         if accuracy <= 75.0:
             st.warning("⚠️ **발화 일치율이 75% 이하입니다.** 아래 어원 비계(Scaffolding) 힌트를 참고하여 다시 시도해보세요!")
             st.markdown("**🔍 어원 및 어휘 비계(Scaffolding) 힌트:**")
