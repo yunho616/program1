@@ -324,7 +324,7 @@ def analyze_audio_bytes(raw_audio_bytes: bytes) -> Dict:
 
 
 # ---------------------------
-# Recorder HTML/JS (component - 날짜 포맷 적용)
+# Recorder HTML/JS (component)
 # ---------------------------
 def render_html_recorder(height: int = 240):
     html = """
@@ -399,9 +399,9 @@ startBtn.onclick = async () => {
       const reader = new FileReader();
       reader.readAsDataURL(blob);
       
-      // 파일명 설정: YYYYMMDD_record 1.webm
+      // 파일명 설정: YYYYMMDD_record.webm
       const dateStr = getTodayString();
-      const defaultFilename = `${dateStr}_record 1.webm`;
+      const defaultFilename = `${dateStr}_record.webm`;
 
       reader.onloadend = () => {
         const dataUrl = reader.result;
@@ -534,10 +534,17 @@ st.sidebar.info("""
 if st.session_state.last_error_msg:
     st.error(st.session_state.last_error_msg)
 
+# 목표 발화 문장 정의
+target_sentence = "We need to accelerate our business strategy to expand market share."
+
 # Main layout
 col_rec, col_scaff = st.columns([1, 1])
 
 with col_rec:
+    # 🎯 [이동 완료] 목표 발화를 최상단으로 배치
+    st.markdown("**🎯 목표 발화 (Target Sentence):**")
+    st.markdown(f"> \"{target_sentence}\"")
+    
     st.subheader("1. 실시간 음성 수신 및 Latency 분석")
     render_html_recorder(260)
 
@@ -557,13 +564,9 @@ with col_rec:
 
 with col_scaff:
     st.subheader("2. AI 자동 역번역 비계 (Scaffolding)")
-    target_sentence = "We need to accelerate our business strategy to expand market share."
-    st.markdown("**🎯 목표 발화 (Target Sentence):**")
-    st.markdown(f"> \"{target_sentence}\"")
 
     # 음성 데이터가 분석되었을 때만 처리 진행
     if st.session_state.analysis_data and "error" not in st.session_state.analysis_data:
-        st.write("---")
         user_transcript = st.text_input(
             "🗣️ 인식된 사용자 발화 (STT 결과 / 테스트 수정 가능):",
             value=st.session_state.user_transcript
