@@ -11,13 +11,13 @@ from typing import List, Optional, Tuple, Dict
 
 import numpy as np
 import streamlit as st
+import streamlit.components.v1 as components
 
 # Optional libs detection
 _have_pydub = False
 _have_imageio_ffmpeg = False
 _have_librosa = False
 _have_webrtcvad = False
-_have_gtts = False
 
 try:
     from pydub import AudioSegment  # type: ignore
@@ -42,12 +42,6 @@ try:
     _have_webrtcvad = True
 except Exception:
     webrtcvad = None
-
-try:
-    from gtts import gTTS  # type: ignore
-    _have_gtts = True
-except Exception:
-    gTTS = None
 
 
 # ---------------------------
@@ -278,8 +272,8 @@ if "last_error_msg" not in st.session_state:
     st.session_state.last_error_msg = None
 if "user_transcript" not in st.session_state:
     st.session_state.user_transcript = "We need accelerate business strategy to expand."
-if "tts_audio_bytes" not in st.session_state:
-    st.session_state.tts_audio_bytes = None
+if "trigger_tts" not in st.session_state:
+    st.session_state.trigger_tts = False
 
 st.title("🛡️ 특허 1호 MVP: 음성 Latency 분석 및 자동 역번역 비계 튜터")
 st.caption("AI-Powered Voice Scaffolding & Real-time Acoustic Latency Analyzer")
@@ -320,7 +314,6 @@ with col_rec:
 
     st.write("---")
     
-    # 텍스트 변경: 테스트용 사운드
     st.subheader("📁 테스트용 사운드")
     
     uploaded_file = st.file_uploader("WAV / MP3 파일 업로드", type=["wav", "webm", "ogg", "mp3", "m4a"])
@@ -333,23 +326,24 @@ with col_rec:
                 st.session_state.analysis_data = analyze_audio_bytes(wav_bytes)
                 _safe_rerun()
 
-    # ✨ "안녕하세요" AI 목소리 재생 버튼 추가
+    # ✨ 브라우저 내장 API를 활용한 "안녕하세요" AI 목소리 재생 버튼
     if st.button("🔊 '안녕하세요' AI 목소리 듣기", use_container_width=True):
-        if _have_gtts:
-            try:
-                tts = gTTS(text="안녕하세요", lang="ko")
-                fp = BytesIO()
-                tts.write_to_fp(fp)
-                st.session_state.tts_audio_bytes = fp.getvalue()
-                st.toast("AI 음성이 생성되었습니다!")
-            except Exception as e:
-                st.error(f"AI 음성 생성 실패: {e}")
-        else:
-            st.error("gTTS 라이브러리가 설치되어 있지 않습니다. (pip install gTTS 필요)")
+        st.session_state.trigger_tts = True
+    else:
+        st.session_state.trigger_tts = False
 
-    # 생성된 AI 음성이 있다면 플레이어 출력
-    if st.session_state.tts_audio_bytes:
-        st.audio(st.session_state.tts_audio_bytes, format="audio/mp3")
+    if st.session_state.trigger_tts:
+        tts_html = """
+        <script>
+            if ('speechSynthesis' in window) {
+                const utterance = new SpeechSynthesisUtterance("안녕하세요");
+                utterance.lang = 'ko-KR';
+                utterance.rate = 1.0;
+                window.speechSynthesis.speak(utterance);
+            }
+        </script>
+        """
+        components.html(tts_html, height=0)
 
     st.write("---")
 
@@ -357,7 +351,7 @@ with col_rec:
         st.session_state.recorded_audio_bytes = None
         st.session_state.analysis_data = None
         st.session_state.last_error_msg = None
-        st.session_state.tts_audio_bytes = None
+        st.session_state.trigger_tts = False
         st.toast("녹음 데이터와 분석 결과가 초기화되었습니다.")
         _safe_rerun()
 
