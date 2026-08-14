@@ -1,4 +1,5 @@
 import base64
+import difflib
 import io
 import math
 import shutil
@@ -99,10 +100,6 @@ def _safe_rerun():
 # Audio conversion helper
 # ---------------------------
 def _ensure_wav_bytes(raw_bytes: bytes) -> Optional[bytes]:
-    """
-    If raw_bytes already a RIFF/WAVE, return it. Otherwise try pydub (ffmpeg)
-    or system ffmpeg to convert to PCM WAV bytes.
-    """
     try:
         if raw_bytes[:4] == b"RIFF" and b"WAVE" in raw_bytes[:12]:
             return raw_bytes
@@ -250,6 +247,19 @@ def fallback_vad(samples: np.ndarray, sr: int, frame_duration_ms: int = 30, ener
 
 
 # ---------------------------
+# Text Similarity Helper
+# ---------------------------
+def calculate_accuracy(target_text: str, user_text: str) -> float:
+    """두 문장 간의 유사도(0.0 ~ 100.0%)를 계산합니다."""
+    t_clean = target_text.strip().lower()
+    u_clean = user_text.strip().lower()
+    if not u_clean:
+        return 0.0
+    matcher = difflib.SequenceMatcher(None, t_clean, u_clean)
+    return round(matcher.ratio() * 100, 1)
+
+
+# ---------------------------
 # Analyze audio bytes
 # ---------------------------
 def analyze_audio_bytes(raw_audio_bytes: bytes) -> Dict:
@@ -314,7 +324,7 @@ def analyze_audio_bytes(raw_audio_bytes: bytes) -> Dict:
 
 
 # ---------------------------
-# Recorder HTML/JS (component - 수정됨)
+# Recorder HTML/JS (component)
 # ---------------------------
 def render_html_recorder(height: int = 240):
     html = """
@@ -324,7 +334,6 @@ def render_html_recorder(height: int = 240):
   </div>
   <div style="display:flex;gap:8px;justify-content:center;">
     <button id="startBtn" style="background:#16a34a;color:white;padding:8px 14px;border:none;border-radius:8px;cursor:pointer;">🔴 녹음 시작</button>
-    <!-- 수정 포인트: 초기 커서를 default로 설정하고 회색 계열 배경 지정 -->
     <button id="stopBtn" disabled style="background:#94a3b8;color:#ffffff;padding:8px 14px;border:none;border-radius:8px;cursor:default;">⏹️ 녹음 정지</button>
   </div>
   <div style="margin-top:8px;font-size:12px;color:#475569;">주의: URL 전송 방식은 긴 녹음에 실패할 수 있습니다. 짧은 문장(수초) 권장.</div>
@@ -356,7 +365,6 @@ startBtn.onclick = async () => {
   startBtn.disabled = true;
   startBtn.style.cursor = "default";
   
-  // 수정 포인트: 녹음 시작 시 정지 버튼 활성화 + 빨간색 스타일 + pointer 커서 전환
   stopBtn.disabled = false;
   stopBtn.style.background = "#ef4444";
   stopBtn.style.cursor = "pointer";
@@ -403,7 +411,6 @@ startBtn.onclick = async () => {
       };
       try { if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; } } catch (e) {}
       
-      // 수정 포인트: 종료 시 정지 버튼 비활성화 및 스타일에 초기화
       stopBtn.disabled = true;
       stopBtn.style.background = "#94a3b8";
       stopBtn.style.cursor = "default";
@@ -468,6 +475,8 @@ if "analysis_data" not in st.session_state:
     st.session_state.analysis_data = None
 if "last_error_msg" not in st.session_state:
     st.session_state.last_error_msg = None
+if "user_transcript" not in st.session_state:
+    st.session_state.user_transcript = "We need accelerate business strategy to expand."
 
 # Handle incoming rec_b64 query param
 query_params = _get_query_params()
@@ -505,6 +514,7 @@ st.sidebar.subheader("💡 학습 가이드")
 st.sidebar.info("""
 1. 마이크로 음성을 녹음하거나 오디오 파일을 업로드하세요.
 2. 음성의 반응 속도(Latency)와 피치(Pitch) 등 핵심 지표가 자동으로 분석됩니다.
+3. **목표 발화 대비 대본 일치율이 75% 이하일 때만 학습용 어원 힌트(Scaffolding)가 표시됩니다.**
 """)
 
 if st.session_state.last_error_msg:
@@ -536,13 +546,36 @@ with col_scaff:
     target_sentence = "We need to accelerate our business strategy to expand market share."
     st.markdown("**🎯 목표 발화 (Target Sentence):**")
     st.markdown(f"> \"{target_sentence}\"")
-    
-    st.markdown("**🔍 어원 및 어휘 비계(Scaffolding) 힌트:**")
-    st.markdown("""
-    * **Accelerate** (v.) [어원: *ac-* (향하여) + *celer* (빠른)] → *속도를 높이다, 가속하다*
-    * **Strategy** (n.) [어원: *stratos* (군대) + *agein* (이끌다)] → *전략, 계획*
-    * **Expand** (v.) [어원: *ex-* (밖으로) + *pandere* (펼치다)] → *확장하다*
-    """)
+
+    # 음성 데이터가 분석되었을 때만 처리 진행
+    if st.session_state.analysis_data and "error" not in st.session_state.analysis_data:
+        st.write("---")
+        # 실제 환경에서는 STT(Speech-to-Text) 결과물이 들어가는 부분입니다.
+        user_transcript = st.text_input(
+            "🗣️ 인식된 사용자 발화 (STT 결과 / 테스트 수정 가능):",
+            value=st.session_state.user_transcript
+        )
+        st.session_state.user_transcript = user_transcript
+
+        # 유사도(일치율) 계산
+        accuracy = calculate_accuracy(target_sentence, user_transcript)
+        
+        # 일치율 표시
+        st.metric("🎯 대본 일치율 (Accuracy)", f"{accuracy}%")
+
+        # ⭐️ 75% 이하일 때만 어원 및 어휘 비계 힌트 출력 ⭐️
+        if accuracy <= 75.0:
+            st.warning("⚠️ **발화 일치율이 75% 이하입니다.** 아래 어원 비계(Scaffolding) 힌트를 참고하여 다시 시도해보세요!")
+            st.markdown("**🔍 어원 및 어휘 비계(Scaffolding) 힌트:**")
+            st.markdown("""
+            * **Accelerate** (v.) [어원: *ac-* (향하여) + *celer* (빠른)] → *속도를 높이다, 가속하다*
+            * **Strategy** (n.) [어원: *stratos* (군대) + *agein* (이끌다)] → *전략, 계획*
+            * **Expand** (v.) [어원: *ex-* (밖으로) + *pandere* (펼치다)] → *확장하다*
+            """)
+        else:
+            st.success("🎉 **발화 일치율이 75%를 초과했습니다!** 훌륭합니다. 비계 힌트 없이도 완벽하게 발화하셨습니다.")
+    else:
+        st.info("👈 좌측에서 음성을 녹음하거나 파일 분석을 먼저 진행해 주세요.")
 
 # Analysis display
 if st.session_state.analysis_data:
