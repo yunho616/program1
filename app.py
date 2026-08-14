@@ -210,9 +210,6 @@ def fallback_vad(samples: np.ndarray, sr: int, frame_duration_ms: int = 30, ener
 
 
 def calculate_word_accuracy_details(target_text: str, user_text: str) -> Tuple[float, int, int, List[str]]:
-    """
-    단어 단위 비교를 통해 정확한 일치율, 정확한 단어 수, 틀린 단어 수 및 틀린/누락된 단어 목록을 반환합니다.
-    """
     target_words = [w.strip(".,?!") for w in target_text.strip().lower().split() if w.strip()]
     user_words = [w.strip(".,?!") for w in user_text.strip().lower().split() if w.strip()]
     
@@ -225,16 +222,13 @@ def calculate_word_accuracy_details(target_text: str, user_text: str) -> Tuple[f
     correct_count = 0
     wrong_words = []
     
-    # opcodes를 통해 어떤 단어가 일치하고 틀렸는지 정밀 판별
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         if tag == 'equal':
             correct_count += (i2 - i1)
         elif tag in ('replace', 'delete'):
-            # 타겟 문장 기준 틀렸거나 빠진 단어들 추가
             for idx in range(i1, i2):
                 wrong_words.append(target_words[idx])
         elif tag == 'insert':
-            # 추가로 잘못 들어간 단어 처리 (필요시 user_words[j1:j2]도 포함 가능)
             pass
 
     if correct_count > total_words:
@@ -426,13 +420,18 @@ with col_scaff:
         
         st.markdown(f"❌ **틀린 단어 수:** {wrong_cnt}개 (정확한 단어: {correct_cnt}개 / 전체: {len(target_sentence.split())}개)")
         
+        # 틀린 단어들을 각각 개별 박스(틀) 형태로 끼워 표현
         if wrong_words:
-            formatted_wrong_words = ", ".join([f"`{w}`" for w in wrong_words])
-            st.markdown(f"🔍 **틀린/누락된 단어 목록:** {formatted_wrong_words}")
+            st.markdown("🔍 **틀린/누락된 단어 틀 목록:**")
+            cols = st.columns(min(len(wrong_words), 4)) if len(wrong_words) > 0 else [st]
+            for idx, w in enumerate(wrong_words):
+                col_target = cols[idx % len(cols)]
+                with col_target:
+                    st.error(f"❌ [{w.upper()}]")
         else:
             st.markdown("✨ **모든 단어를 정확하게 발음하셨습니다!**")
 
-        # --- 단어 간 Latency 분석 (2.5초 초과 단어 검출바이) ---
+        # --- 단어 간 Latency 분석 (2.5초 초과 단어 검출) ---
         voicing_frames = res.get("voicing_frames", [])
         frame_dur_sec = 0.03
         
