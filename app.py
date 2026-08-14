@@ -17,6 +17,7 @@ _have_pydub = False
 _have_imageio_ffmpeg = False
 _have_librosa = False
 _have_webrtcvad = False
+_have_gtts = False
 
 try:
     from pydub import AudioSegment  # type: ignore
@@ -41,6 +42,12 @@ try:
     _have_webrtcvad = True
 except Exception:
     webrtcvad = None
+
+try:
+    from gtts import gTTS  # type: ignore
+    _have_gtts = True
+except Exception:
+    gTTS = None
 
 
 # ---------------------------
@@ -271,14 +278,16 @@ if "last_error_msg" not in st.session_state:
     st.session_state.last_error_msg = None
 if "user_transcript" not in st.session_state:
     st.session_state.user_transcript = "We need accelerate business strategy to expand."
+if "tts_audio_bytes" not in st.session_state:
+    st.session_state.tts_audio_bytes = None
 
 st.title("🛡️ 특허 1호 MVP: 음성 Latency 분석 및 자동 역번역 비계 튜터")
 st.caption("AI-Powered Voice Scaffolding & Real-time Acoustic Latency Analyzer")
 
 st.sidebar.subheader("💡 학습 가이드")
 st.sidebar.info("""
-1. 아래 마이크 녹음 버튼을 눌러 음성을 녹음하세요.
-2. 녹음이 끝나면 자동으로 음성이 등록됩니다.
+1. 마이크 녹음 버튼을 눌러 음성을 녹음하세요.
+2. '테스트용 사운드' 영역에서 파일을 업로드하거나 AI 음성을 들어볼 수 있습니다.
 3. 우측 비계 영역에서 분석 결과와 어원 힌트가 출력됩니다.
 """)
 
@@ -295,7 +304,6 @@ with col_rec:
     
     st.subheader("1. 마이크 실시간 녹음")
     
-    # ✨ Streamlit 공식 마이크 녹음 컴포넌트 사용
     audio_file = st.audio_input("🔴 마이크 녹음하기")
 
     if audio_file is not None:
@@ -311,7 +319,10 @@ with col_rec:
                 st.session_state.last_error_msg = "오디오 포맷 변환 실패: WAV로 변환하지 못했습니다."
 
     st.write("---")
-    st.write("📁 또는 테스트용 파일 업로드")
+    
+    # 텍스트 변경: 테스트용 사운드
+    st.subheader("📁 테스트용 사운드")
+    
     uploaded_file = st.file_uploader("WAV / MP3 파일 업로드", type=["wav", "webm", "ogg", "mp3", "m4a"])
     if uploaded_file is not None:
         file_bytes = uploaded_file.read()
@@ -322,10 +333,31 @@ with col_rec:
                 st.session_state.analysis_data = analyze_audio_bytes(wav_bytes)
                 _safe_rerun()
 
+    # ✨ "안녕하세요" AI 목소리 재생 버튼 추가
+    if st.button("🔊 '안녕하세요' AI 목소리 듣기", use_container_width=True):
+        if _have_gtts:
+            try:
+                tts = gTTS(text="안녕하세요", lang="ko")
+                fp = BytesIO()
+                tts.write_to_fp(fp)
+                st.session_state.tts_audio_bytes = fp.getvalue()
+                st.toast("AI 음성이 생성되었습니다!")
+            except Exception as e:
+                st.error(f"AI 음성 생성 실패: {e}")
+        else:
+            st.error("gTTS 라이브러리가 설치되어 있지 않습니다. (pip install gTTS 필요)")
+
+    # 생성된 AI 음성이 있다면 플레이어 출력
+    if st.session_state.tts_audio_bytes:
+        st.audio(st.session_state.tts_audio_bytes, format="audio/mp3")
+
+    st.write("---")
+
     if st.button("🔄 녹음 데이터 초기화", use_container_width=True):
         st.session_state.recorded_audio_bytes = None
         st.session_state.analysis_data = None
         st.session_state.last_error_msg = None
+        st.session_state.tts_audio_bytes = None
         st.toast("녹음 데이터와 분석 결과가 초기화되었습니다.")
         _safe_rerun()
 
@@ -366,4 +398,4 @@ with col_scaff:
     elif st.session_state.analysis_data and "error" in st.session_state.analysis_data:
         st.error(st.session_state.analysis_data["error"])
     else:
-        st.info("👈 좌측에서 마이크로 음성을 녹음하거나 파일을 업로드하면 분석 결과가 출력됩니다.")
+        st.info("👈 좌측에서 마이크로 음성을 녹음하거나 AI 음성을 생성하여 테스트해 보세요.")
