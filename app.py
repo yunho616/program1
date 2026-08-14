@@ -360,10 +360,9 @@ with col_scaff:
         res = st.session_state.analysis_data
         st.markdown("##### 📊 음성 데이터 분석 결과")
         
-        # 녹음 시간(0.1초 단위), WPM, CPM을 나란히 배치하기 위해 3개 컬럼 생성
         duration_val = res.get('duration_sec', 0.0)
         
-        # 발화 텍스트 기반 WPM / CPM 대략적 계산
+        # 발화 텍스트 기반 WPM / CPM 계산
         words = [w for w in st.session_state.user_transcript.split() if w.strip()]
         num_words = len(words)
         num_chars = len(st.session_state.user_transcript.replace(" ", ""))
@@ -375,10 +374,10 @@ with col_scaff:
             wpm = 0
             cpm = 0
 
-        m1, m2, m3 = st.columns(3)
+        m1, m2 = st.columns(2)
         m1.metric("⏱️ 녹음 시간", f"{duration_val:.1f} 초")
-        m2.metric("WPM", f"{wpm}")
-        m3.metric("CPM", f"{cpm}")
+        # WPM / CPM을 "숫자 / 숫자" 형식으로 결합
+        m2.metric("속도 (WPM / CPM)", f"{wpm} / {cpm}")
 
         st.write("---")
         
