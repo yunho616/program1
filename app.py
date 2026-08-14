@@ -209,25 +209,41 @@ def fallback_vad(samples: np.ndarray, sr: int, frame_duration_ms: int = 30, ener
     return np.array(voicing, dtype=int)
 
 
-def calculate_word_accuracy_details(target_text: str, user_text: str) -> Tuple[float, int, int]:
-    target_words = target_text.strip().lower().split()
-    user_words = user_text.strip().lower().split()
+def calculate_word_accuracy_details(target_text: str, user_text: str) -> Tuple[float, int, int, List[str]]:
+    """
+    단어 단위 비교를 통해 정확한 일치율, 정확한 단어 수, 틀린 단어 수 및 틀린/누락된 단어 목록을 반환합니다.
+    """
+    target_words = [w.strip(".,?!") for w in target_text.strip().lower().split() if w.strip()]
+    user_words = [w.strip(".,?!") for w in user_text.strip().lower().split() if w.strip()]
     
     total_words = len(target_words)
     if total_words == 0:
-        return 0.0, 0, 0
+        return 0.0, 0, 0, []
 
     matcher = difflib.SequenceMatcher(None, target_words, user_words)
-    matching_blocks = matcher.get_matching_blocks()
     
-    correct_count = sum(block.size for block in matching_blocks)
+    correct_count = 0
+    wrong_words = []
+    
+    # opcodes를 통해 어떤 단어가 일치하고 틀렸는지 정밀 판별
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == 'equal':
+            correct_count += (i2 - i1)
+        elif tag in ('replace', 'delete'):
+            # 타겟 문장 기준 틀렸거나 빠진 단어들 추가
+            for idx in range(i1, i2):
+                wrong_words.append(target_words[idx])
+        elif tag == 'insert':
+            # 추가로 잘못 들어간 단어 처리 (필요시 user_words[j1:j2]도 포함 가능)
+            pass
+
     if correct_count > total_words:
         correct_count = total_words
         
     wrong_count = total_words - correct_count
     accuracy = round((correct_count / total_words) * 100.0, 1)
     
-    return accuracy, correct_count, wrong_count
+    return accuracy, correct_count, wrong_count, wrong_words
 
 
 def analyze_audio_bytes(raw_audio_bytes: bytes) -> Dict:
@@ -386,8 +402,8 @@ with col_scaff:
             wpm = 0
             cpm = 0
 
-        # 정밀 단어 분석 기반 대본 일치율 및 틀린 단어 수 계산
-        accuracy, correct_cnt, wrong_cnt = calculate_word_accuracy_details(target_sentence, st.session_state.user_transcript)
+        # 정밀 단어 분석 및 틀린 단어 목록 추출
+        accuracy, correct_cnt, wrong_cnt, wrong_words = calculate_word_accuracy_details(target_sentence, st.session_state.user_transcript)
 
         # 메인 분석 지표 3개 분할 배치 (녹음 시간 / 속도(WPM/CPM) / 대본 일치율)
         m1, m2, m3 = st.columns(3)
@@ -405,12 +421,18 @@ with col_scaff:
         user_transcript = st.text_input("🗣️ 인식된 사용자 발화:", value=st.session_state.user_transcript)
         st.session_state.user_transcript = user_transcript
 
-        # 실시간 변경된 텍스트에 맞춰 일치율 및 틀린 단어 수 재계산 적용
-        accuracy, correct_cnt, wrong_cnt = calculate_word_accuracy_details(target_sentence, user_transcript)
+        # 실시간 변경된 텍스트에 맞춰 일치율 및 틀린 단어 목록 재계산 적용
+        accuracy, correct_cnt, wrong_cnt, wrong_words = calculate_word_accuracy_details(target_sentence, user_transcript)
         
         st.markdown(f"❌ **틀린 단어 수:** {wrong_cnt}개 (정확한 단어: {correct_cnt}개 / 전체: {len(target_sentence.split())}개)")
+        
+        if wrong_words:
+            formatted_wrong_words = ", ".join([f"`{w}`" for w in wrong_words])
+            st.markdown(f"🔍 **틀린/누락된 단어 목록:** {formatted_wrong_words}")
+        else:
+            st.markdown("✨ **모든 단어를 정확하게 발음하셨습니다!**")
 
-        # --- 단어 간 Latency 분석 (2.5초 초과 단어 검출) ---
+        # --- 단어 간 Latency 분석 (2.5초 초과 단어 검출바이) ---
         voicing_frames = res.get("voicing_frames", [])
         frame_dur_sec = 0.03
         
