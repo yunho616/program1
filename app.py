@@ -348,7 +348,6 @@ const startBtn = document.getElementById('startBtn');
 const stopBtn = document.getElementById('stopBtn');
 const status = document.getElementById('status');
 
-// 현재 날짜(YYYYMMDD) 생성 함수
 function getTodayString() {
   const today = new Date();
   const year = today.getFullYear();
@@ -399,7 +398,6 @@ startBtn.onclick = async () => {
       const reader = new FileReader();
       reader.readAsDataURL(blob);
       
-      // 파일명 설정: YYYYMMDD_record.webm
       const dateStr = getTodayString();
       const defaultFilename = `${dateStr}_record.webm`;
 
@@ -527,25 +525,24 @@ st.caption("AI-Powered Voice Scaffolding & Real-time Acoustic Latency Analyzer")
 st.sidebar.subheader("💡 학습 가이드")
 st.sidebar.info("""
 1. 마이크로 음성을 녹음하거나 오디오 파일을 업로드하세요.
-2. 음성의 반응 속도(Latency)와 피치(Pitch) 등 핵심 지표가 자동으로 분석됩니다.
-3. **목표 발화 대비 대본 일치율이 75% 이하일 때만 학습용 어원 힌트(Scaffolding)가 표시됩니다.**
+2. 우측 비계(Scaffolding) 영역에서 음성의 Latency, Pitch 등 분석 결과가 즉시 출력됩니다.
+3. **학습 지문 대비 대본 일치율이 75% 이하일 때만 학습용 어원 힌트(Scaffolding)가 표시됩니다.**
 """)
 
 if st.session_state.last_error_msg:
     st.error(st.session_state.last_error_msg)
 
-# 목표 발화 문장 정의
+# 학습 지문 문장 정의
 target_sentence = "We need to accelerate our business strategy to expand market share."
 
 # Main layout
 col_rec, col_scaff = st.columns([1, 1])
 
 with col_rec:
-    # 🎯 [이동 완료] 목표 발화를 최상단으로 배치
-    st.markdown("**🎯 목표 발화 (Target Sentence):**")
+    st.markdown("**🎯 오늘의 학습 지문:**")
     st.markdown(f"> \"{target_sentence}\"")
     
-    st.subheader("1. 실시간 음성 수신 및 Latency 분석")
+    st.subheader("1. 실시간 음성 수신")
     render_html_recorder(260)
 
     st.write("---")
@@ -565,8 +562,38 @@ with col_rec:
 with col_scaff:
     st.subheader("2. AI 자동 역번역 비계 (Scaffolding)")
 
-    # 음성 데이터가 분석되었을 때만 처리 진행
+    # [수정] 분석 데이터가 있는 경우, 분석 지표를 비계 영역 상단에 출력
     if st.session_state.analysis_data and "error" not in st.session_state.analysis_data:
+        res = st.session_state.analysis_data
+
+        # --- 📊 음성 분석 결과 영역 ---
+        st.markdown("##### 📊 음성 데이터 분석 결과 (Acoustic Metrics)")
+        
+        m1, m2, m3 = st.columns(3)
+        m1.metric("⏱️ 음성 Latency", f"{res.get('latency_ms', 0)} ms")
+        m2.metric("🎵 평균 Pitch", f"{res.get('avg_pitch_hz', 0)} Hz")
+        m3.metric("📡 SNR (dB)", f"{res.get('snr_db', 0)} dB")
+
+        m4, m5 = st.columns(2)
+        m4.metric("🔊 Signal RMS", f"{res.get('total_rms', 0)}")
+        m5.metric("⏳ 전체 길이", f"{res.get('duration_sec', 0)} 초")
+
+        # 재생 플레이어 및 VAD 타임라인
+        if st.session_state.recorded_audio_bytes:
+            try:
+                st.audio(st.session_state.recorded_audio_bytes, format="audio/wav")
+            except Exception:
+                st.audio(st.session_state.recorded_audio_bytes)
+
+        voicing_data = res.get("voicing_frames", [])
+        if voicing_data:
+            with st.expander("📈 Voice Activity Detection (VAD) 타임라인 보기"):
+                st.line_chart(voicing_data, height=120)
+                st.caption("1: 음성 감지 | 0: 묵음")
+
+        st.write("---")
+
+        # --- 🗣️ STT 및 일치율 분석 영역 ---
         user_transcript = st.text_input(
             "🗣️ 인식된 사용자 발화 (STT 결과 / 테스트 수정 가능):",
             value=st.session_state.user_transcript
@@ -575,8 +602,6 @@ with col_scaff:
 
         # 유사도(일치율) 계산
         accuracy = calculate_accuracy(target_sentence, user_transcript)
-        
-        # 일치율 표시
         st.metric("🎯 대본 일치율 (Accuracy)", f"{accuracy}%")
 
         # 75% 이하일 때만 어원 및 어휘 비계 힌트 출력
@@ -590,35 +615,8 @@ with col_scaff:
             """)
         else:
             st.success("🎉 **발화 일치율이 75%를 초과했습니다!** 훌륭합니다. 비계 힌트 없이도 완벽하게 발화하셨습니다.")
+
+    elif st.session_state.analysis_data and "error" in st.session_state.analysis_data:
+        st.error(st.session_state.analysis_data["error"])
     else:
-        st.info("👈 좌측에서 음성을 녹음하거나 파일 분석을 먼저 진행해 주세요.")
-
-# Analysis display
-if st.session_state.analysis_data:
-    st.divider()
-    st.subheader("📊 음성 실시간 분석 결과 (Patent Metrics)")
-    res = st.session_state.analysis_data
-
-    if isinstance(res, dict) and "error" in res:
-        st.error(res["error"])
-    elif isinstance(res, dict):
-        m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("⏱️ 음성 Latency", f"{res.get('latency_ms', 0)} ms")
-        m2.metric("🎵 평균 Pitch", f"{res.get('avg_pitch_hz', 0)} Hz")
-        m3.metric("🔊 Signal RMS", f"{res.get('total_rms', 0)}")
-        m4.metric("📡 SNR (dB)", f"{res.get('snr_db', 0)} dB")
-        m5.metric("⏳ 전체 길이", f"{res.get('duration_sec', 0)} 초")
-
-        if st.session_state.recorded_audio_bytes:
-            try:
-                st.audio(st.session_state.recorded_audio_bytes, format="audio/wav")
-            except Exception:
-                st.audio(st.session_state.recorded_audio_bytes)
-
-        st.markdown("##### 📈 Voice Activity Detection (VAD) 타임라인")
-        voicing_data = res.get("voicing_frames", [])
-        if voicing_data:
-            st.line_chart(voicing_data, height=150)
-            st.caption("1: 음성 감지 | 0: 묵음")
-    else:
-        st.info("분석 결과가 없습니다. 좌측에서 녹음 또는 업로드 후 분석하세요.")
+        st.info("👈 좌측에서 음성을 녹음하거나 파일 분석을 진행하면 이 위치에 음성 분석 결과와 비계(Scaffolding) 힌트가 출력됩니다.")
