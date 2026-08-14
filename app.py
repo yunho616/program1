@@ -277,8 +277,8 @@ st.caption("AI-Powered Voice Scaffolding & Real-time Acoustic Latency Analyzer")
 
 st.sidebar.subheader("💡 학습 가이드")
 st.sidebar.info("""
-1. 마이크 녹음 버튼을 눌러 음성을 녹음하세요.
-2. '🎙️ 테스트용 사운드'의 AI 목소리 생성 버튼을 누르면 테스트용 오디오와 분석 결과가 제공됩니다.
+1. 마이크 녹음 버튼을 눌러 음성을 녹음하세요. (녹음 중 문구가 표시됩니다)
+2. '🎙️ 테스트용 사운드'의 AI 음성 생성 버튼을 누르면 테스트용 오디오와 분석 결과가 제공됩니다.
 3. 생성된 오디오 플레이어의 재생 버튼을 눌러 소리를 확인하세요.
 """)
 
@@ -295,7 +295,30 @@ with col_rec:
     
     st.subheader("1. 마이크 실시간 녹음")
     
-    audio_file = st.audio_input("🔴 마이크 녹음하기")
+    # 마이크 버튼 바로 위에 뜨는 녹음 상태 표시용 스타일 컴포넌트
+    st.markdown("""
+        <style>
+        .recording-badge {
+            background-color: #ff4b4b;
+            color: white;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 13px;
+            font-weight: bold;
+            display: inline-block;
+            margin-bottom: 6px;
+            animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+            0% { opacity: 1.0; }
+            50% { opacity: 0.4; }
+            100% { opacity: 1.0; }
+        }
+        </style>
+        <div class="recording-badge">🔴 녹음 중 상태 안내 영역</div>
+    """, unsafe_allow_html=True)
+
+    audio_file = st.audio_input("마이크 녹음하기")
 
     if audio_file is not None:
         raw_bytes = audio_file.read()
@@ -315,7 +338,6 @@ with col_rec:
     st.subheader("🎙️ 테스트용 사운드")
     
     if st.button("🔊 테스트용 AI 음성 및 분석 생성", use_container_width=True):
-        # 1초 길이의 깨끗한 오디오 톤(WAV) 데이터를 파이썬으로 직접 생성
         sr = 16000
         duration = 1.0
         t = np.linspace(0, duration, int(sr * duration), endpoint=False)
@@ -328,7 +350,6 @@ with col_rec:
             wf.setframerate(sr)
             wf.writeframes(audio_data.tobytes())
         
-        # 세션에 오디오 바이트 및 임의 분석 데이터 저장
         st.session_state.recorded_audio_bytes = wav_io.getvalue()
         st.session_state.analysis_data = {
             "duration_sec": 1.0,
@@ -345,7 +366,6 @@ with col_rec:
         st.toast("테스트용 사운드와 분석 데이터가 생성되었습니다!")
         _safe_rerun()
 
-    # 테스트 데이터가 생성되면 아래에 플레이어 노출 (사용자가 직접 누르면 확실하게 소리 재생됨)
     if st.session_state.recorded_audio_bytes:
         st.markdown("👇 **생성된 테스트 오디오 (재생 버튼을 누르세요):**")
         st.audio(st.session_state.recorded_audio_bytes, format="audio/wav")
