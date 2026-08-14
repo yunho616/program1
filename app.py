@@ -279,7 +279,7 @@ st.sidebar.subheader("💡 학습 가이드")
 st.sidebar.info("""
 1. 마이크 직접 녹음기 버튼을 눌러 음성을 녹음하세요.
 2. '🎙️ 테스트용 사운드'의 AI 음성 생성 버튼을 누르면 테스트용 오디오와 분석 결과가 제공됩니다.
-3. 생성된 오디오 플레이어의 재생 버튼을 눌러 소리를 확인하세요.
+3. 오른쪽 영역에서 녹음된 오디오를 듣고 인식된 발화를 확인하세요.
 """)
 
 if st.session_state.last_error_msg:
@@ -295,7 +295,7 @@ with col_rec:
     
     st.subheader("1. 마이크 실시간 녹음")
     
-    # 마이크 직접 녹음기 위젯 배치 (추가적인 녹음 시작/중지 버튼 없음)
+    # 마이크 직접 녹음기 위젯
     audio_file = st.audio_input("마이크 직접 녹음기")
 
     if audio_file is not None:
@@ -312,7 +312,7 @@ with col_rec:
 
     st.write("---")
     
-    # 🎙️ 테스트용 사운드 영역
+    # 🎙️ 테스트용 사운드 영역 (플레이어 칸은 제거하고 생성 버튼만 유지)
     st.subheader("🎙️ 테스트용 사운드")
     
     if st.button("🔊 테스트용 AI 음성 및 분석 생성", use_container_width=True):
@@ -344,10 +344,6 @@ with col_rec:
         st.toast("테스트용 사운드와 분석 데이터가 생성되었습니다!")
         _safe_rerun()
 
-    if st.session_state.recorded_audio_bytes:
-        st.markdown("👇 **생성된 테스트 오디오 (재생 버튼을 누르세요):**")
-        st.audio(st.session_state.recorded_audio_bytes, format="audio/wav")
-
     st.write("---")
 
     if st.button("🔄 녹음 데이터 초기화", use_container_width=True):
@@ -370,6 +366,12 @@ with col_scaff:
         m3.metric("📡 SNR (dB)", f"{res.get('snr_db', 0)} dB")
 
         st.write("---")
+        
+        # 🔊 사용자가 녹음한 오디오 재생 플레이어 배치
+        if st.session_state.recorded_audio_bytes:
+            st.markdown("🔊 **내 녹음 듣기:**")
+            st.audio(st.session_state.recorded_audio_bytes, format="audio/wav")
+
         user_transcript = st.text_input("🗣️ 인식된 사용자 발화:", value=st.session_state.user_transcript)
         st.session_state.user_transcript = user_transcript
 
