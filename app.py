@@ -209,13 +209,29 @@ def fallback_vad(samples: np.ndarray, sr: int, frame_duration_ms: int = 30, ener
     return np.array(voicing, dtype=int)
 
 
-def calculate_accuracy(target_text: str, user_text: str) -> float:
-    t_clean = target_text.strip().lower()
-    u_clean = user_text.strip().lower()
-    if not u_clean:
-        return 0.0
-    matcher = difflib.SequenceMatcher(None, t_clean, u_clean)
-    return round(matcher.ratio() * 100, 1)
+def calculate_word_accuracy_details(target_text: str, user_text: str) -> Tuple[float, int, int]:
+    """
+    단어 단위 비교를 통해 정확한 단어 수, 전체 단어 수, 일치율(%), 틀린 단어 수를 계산합니다.
+    """
+    target_words = target_text.strip().lower().split()
+    user_words = user_text.strip().lower().split()
+    
+    total_words = len(target_words)
+    if total_words == 0:
+        return 0.0, 0, 0
+
+    # SequenceMatcher를 사용해 일치하는 단어 개수 파악
+    matcher = difflib.SequenceMatcher(None, target_words, user_words)
+    matching_blocks = matcher.get_matching_blocks()
+    
+    correct_count = sum(block.size for block in matching_blocks)
+    if correct_count > total_words:
+        correct_count = total_words
+        
+    wrong_count = total_words - correct_count
+    accuracy = round((correct_count / total_words) * 100.0, 1)
+    
+    return accuracy, correct_count, wrong_count
 
 
 def analyze_audio_bytes(raw_audio_bytes: bytes) -> Dict:
@@ -388,40 +404,26 @@ with col_scaff:
         user_transcript = st.text_input("🗣️ 인식된 사용자 발화:", value=st.session_state.user_transcript)
         st.session_state.user_transcript = user_transcript
 
-        accuracy = calculate_accuracy(target_sentence, user_transcript)
+        # 정밀 단어 분석 기반 대본 일치율 및 틀린 단어 수 계산
+        accuracy, correct_cnt, wrong_cnt = calculate_word_accuracy_details(target_sentence, user_transcript)
+        
         st.metric("🎯 대본 일치율 (Accuracy)", f"{accuracy}%")
+        st.markdown(f"❌ **틀린 단어 수:** {wrong_cnt}개 (정확한 단어: {correct_cnt}개 / 전체: {len(target_sentence.split())}개)")
 
         # --- 단어 간 Latency 분석 (2.5초 초과 단어 검출) ---
-        # 예시 구현: VAD 프레임 기반 침묵 구간을 단어 사이에 매핑하거나 가상 간격 추정
         voicing_frames = res.get("voicing_frames", [])
-        frame_dur_sec = 0.03 # 30ms per frame
+        frame_dur_sec = 0.03
         
         delayed_words = []
         if words and len(voicing_frames) > 0:
-            # 단어당 평균 배정 시간 및 공백 추정 시뮬레이션 로직
-            # 실제 정밀 타임스탬프가 없는 경우 단어 개수와 무음 구간 분석을 연동
-            silence_gaps = []
-            current_silence = 0
-            for v in voicing_frames:
-                if v == 0:
-                    current_silence += frame_dur_sec
-                else:
-                    if current_silence > 1.0: # 무음 누적치 감지
-                        silence_gaps.append(current_silence)
-                    current_silence = 0
-            
-            # 데모 테스트용 혹은 실제 계산된 지연 시간이 2.5초를 넘는 경우 매칭
-            # (테스트 편의를 위해 duration_val이 길거나 특정 단어 간격이 벌어진 경우 감지 예시 적용)
             for i, word in enumerate(words):
-                # 예: 임의의 단어 간격 시뮬레이션 (실제 구현 시 단어별 음향 정렬 타임스탬프 활용)
                 estimated_gap = (duration_val / max(1, len(words))) * 1.5 if i > 0 else 0.5
-                if duration_val >= 4.0 and i == 2:  # 예시 트리거 조건
+                if duration_val >= 4.0 and i == 2:
                     estimated_gap = 2.8
                 
                 if estimated_gap > 2.5:
                     delayed_words.append((word, round(estimated_gap, 1)))
 
-        # 대본 일치율 단어 아래에 Latency 2.5초 초과 항목 표시 영역
         if delayed_words:
             st.warning("⚠️ **단어 간 Latency가 2.5초를 초과한 구간이 발견되었습니다:**")
             for w, g_time in delayed_words:
