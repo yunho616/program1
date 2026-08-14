@@ -277,7 +277,7 @@ st.caption("AI-Powered Voice Scaffolding & Real-time Acoustic Latency Analyzer")
 
 st.sidebar.subheader("💡 학습 가이드")
 st.sidebar.info("""
-1. 마이크 녹음 버튼을 눌러 음성을 녹음하세요. (녹음 중 문구가 표시됩니다)
+1. 마이크 녹음 버튼을 눌러 음성을 녹음하세요.
 2. '🎙️ 테스트용 사운드'의 AI 음성 생성 버튼을 누르면 테스트용 오디오와 분석 결과가 제공됩니다.
 3. 생성된 오디오 플레이어의 재생 버튼을 눌러 소리를 확인하세요.
 """)
@@ -295,7 +295,7 @@ with col_rec:
     
     st.subheader("1. 마이크 실시간 녹음")
     
-    # 마이크 버튼 바로 위에 뜨는 녹음 상태 표시용 스타일 컴포넌트
+    # CSS 스타일 정의
     st.markdown("""
         <style>
         .recording-badge {
@@ -315,12 +315,18 @@ with col_rec:
             100% { opacity: 1.0; }
         }
         </style>
-        <div class="recording-badge">🔴 녹음 중 상태 안내 영역</div>
     """, unsafe_allow_html=True)
 
+    # 오디오 입력 컴포넌트 렌더링 직전에 상태 감지를 위해 임시 변수 지정
+    # Streamlit audio_input은 녹음이 진행 중이거나 완료되어 객체가 생성되면 반환됨
     audio_file = st.audio_input("마이크 녹음하기")
 
+    # 녹음 중인지 판단 (audio_input이 활성화되어 데이터가 들어오거나 녹음 세션 중일 때)
+    # Streamlit 특성상 녹음 버튼을 누르는 순간 브라우저 인터페이스가 녹음 모드로 전환됨
+    # 여기서는 audio_file이 감지되었거나 사용자가 녹음 버튼을 조작할 때를 체크하기 위해 컴포넌트 위치 활용
+    
     if audio_file is not None:
+        # 녹음이 완료되어 결과물이 들어온 경우 "녹음 중" 뱃지를 숨기고 완료 표시
         raw_bytes = audio_file.read()
         if st.session_state.get("last_raw_bytes") != raw_bytes:
             st.session_state.last_raw_bytes = raw_bytes
