@@ -8,19 +8,16 @@ import subprocess
 import wave
 from io import BytesIO
 from urllib.parse import unquote_plus
-
 from typing import List, Optional, Tuple, Dict
 
 import numpy as np
 import streamlit as st
 import streamlit.components.v1 as components
-from streamlit_mic_recorder import mic_recorder
 
 # Optional libs detection
 _have_pydub = False
 _have_imageio_ffmpeg = False
 _have_librosa = False
-_have_crepe = False
 _have_webrtcvad = False
 
 try:
@@ -40,12 +37,6 @@ try:
     _have_librosa = True
 except Exception:
     librosa = None
-
-try:
-    import crepe  # type: ignore
-    _have_crepe = True
-except Exception:
-    crepe = None
 
 try:
     import webrtcvad  # type: ignore
@@ -247,9 +238,6 @@ def fallback_vad(samples: np.ndarray, sr: int, frame_duration_ms: int = 30, ener
     return np.array(voicing, dtype=int)
 
 
-# ---------------------------
-# Text Similarity Helper
-# ---------------------------
 def calculate_accuracy(target_text: str, user_text: str) -> float:
     t_clean = target_text.strip().lower()
     u_clean = user_text.strip().lower()
@@ -259,14 +247,11 @@ def calculate_accuracy(target_text: str, user_text: str) -> float:
     return round(matcher.ratio() * 100, 1)
 
 
-# ---------------------------
-# Analyze audio bytes
-# ---------------------------
 def analyze_audio_bytes(raw_audio_bytes: bytes) -> Dict:
     try:
         wav_bytes = _ensure_wav_bytes(raw_audio_bytes)
         if wav_bytes is None:
-            return {"error": "Failed to convert input to WAV. Install ffmpeg and pydub or imageio-ffmpeg."}
+            return {"error": "Failed to convert input to WAV."}
         samples, sr = parse_wav_bytes(wav_bytes)
     except Exception as e:
         return {"error": f"WAV parsing failed: {e}"}
@@ -275,26 +260,7 @@ def analyze_audio_bytes(raw_audio_bytes: bytes) -> Dict:
     total_rms = compute_rms(samples)
     zcr = compute_zcr(samples)
     snr_db = compute_snr(samples)
-
-    if _have_webrtcvad:
-        try:
-            import array
-            int16 = (samples * 32767.0).astype(np.int16)
-            pcm_bytes = int16.tobytes()
-            vad = webrtcvad.Vad(2)
-            frame_ms = 30
-            bytes_per_frame = int(sr * frame_ms / 1000.0) * 2
-            frames = []
-            for i in range(0, len(pcm_bytes), bytes_per_frame):
-                chunk = pcm_bytes[i : i + bytes_per_frame]
-                if len(chunk) < bytes_per_frame:
-                    break
-                frames.append(1 if vad.is_speech(chunk, sr) else 0)
-            voicing = np.array(frames, dtype=int)
-        except Exception:
-            voicing = fallback_vad(samples, sr)
-    else:
-        voicing = fallback_vad(samples, sr)
+    voicing = fallback_vad(samples, sr)
 
     frame_duration_ms = 30
     first_idx = int(np.argmax(voicing == 1)) if np.any(voicing == 1) else -1
@@ -334,26 +300,24 @@ if "last_error_msg" not in st.session_state:
     st.session_state.last_error_msg = None
 if "user_transcript" not in st.session_state:
     st.session_state.user_transcript = "We need accelerate business strategy to expand."
+if "is_recording" not in st.session_state:
+    st.session_state.is_recording = False
 
-# --- Header ---
 st.title("🛡️ 특허 1호 MVP: 음성 Latency 분석 및 자동 역번역 비계 튜터")
 st.caption("AI-Powered Voice Scaffolding & Real-time Acoustic Latency Analyzer")
 
-# --- Sidebar ---
 st.sidebar.subheader("💡 학습 가이드")
 st.sidebar.info("""
-1. 마이크로 음성을 녹음하거나 오디오 파일을 업로드하세요.
-2. 우측 비계(Scaffolding) 영역에서 음성의 Latency, Pitch 등 분석 결과가 즉시 출력됩니다.
-3. **학습 지문 대비 대본 일치율이 75% 이하일 때만 학습용 어원 힌트(Scaffolding)가 표시됩니다.**
+1. '녹음 시작' 버튼을 눌러 마이크 녹음을 진행하세요.
+2. 발화가 끝나면 '녹음 정지' 버튼을 누르세요.
+3. 우측 비계 영역에서 분석 결과와 어원 힌트가 출력됩니다.
 """)
 
 if st.session_state.last_error_msg:
     st.error(st.session_state.last_error_msg)
 
-# 학습 지문 문장 정의
 target_sentence = "We need to accelerate our business strategy to expand market share."
 
-# Main layout
 col_rec, col_scaff = st.columns([1, 1])
 
 with col_rec:
@@ -362,44 +326,94 @@ with col_rec:
     
     st.subheader("1. 실시간 음성 수신")
     
-    # 🔴 "녹음 시작"과 "⏹️ 녹음 정지" 버튼을 좌우 2개의 컬럼으로 분리 배치
-    rec_col1, rec_col2 = st.columns(2)
+    # 🔴 "녹음 시작"과 "⏹️ 녹음 정지" 버튼 분리 레이아웃
+    r_col1, r_col2 = st.columns(2)
     
-    with rec_col1:
-        st.markdown("**[녹음 시작]**")
-    with rec_col2:
-        st.markdown("**[녹음 정지]**")
+    with r_col1:
+        if st.button("🔴 녹음 시작", use_container_width=True):
+            st.session_state.is_recording = True
+            st.toast("마이크 녹음이 시작되었습니다!")
+            
+    with r_col2:
+        if st.button("⏹️ 녹음 정지", use_container_width=True):
+            st.session_state.is_recording = False
+            st.toast("마이크 녹음이 중지되었습니다.")
 
-    # mic_recorder 컴포넌트를 호출하여 하단에 연동 (버튼명 커스텀 분리 형태)
-    audio_data = mic_recorder(
-        start_prompt="🔴 녹음 시작하기",
-        stop_prompt="⏹️ 녹음 완료/정지",
-        key="mic_recorder",
-        use_container_width=True,
-    )
+    # 브라우저 MediaRecorder API를 직접 주입하여 완벽하게 분리된 녹음 기능 수행
+    recording_html = """
+    <div>
+        <button id="recordBtn" style="display:none;"></button>
+        <p id="status" style="font-weight:bold; color:#555;">상태: 대기 중</p>
+    </div>
+    <script>
+        let mediaRecorder;
+        let audioChunks = [];
+        
+        const isRec = %s;
+        
+        if (isRec && (!mediaRecorder || mediaRecorder.state === "inactive")) {
+            navigator.mediaDevices.getUserMedia({ audio: true })
+                .then(stream => {
+                    mediaRecorder = new MediaRecorder(stream);
+                    audioChunks = [];
+                    mediaRecorder.ondataavailable = event => {
+                        audioChunks.push(event.data);
+                    };
+                    mediaRecorder.onstop = () => {
+                        const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                        const reader = new FileReader();
+                        reader.readAsDataURL(audioBlob);
+                        reader.onloadend = () => {
+                            const base64data = reader.result;
+                            const queryParam = "?rec_b64=" + encodeURIComponent(base64data);
+                            window.parent.location.search = queryParam;
+                        };
+                    };
+                    mediaRecorder.start();
+                    document.getElementById("status").innerText = "상태: 🔴 녹음 중...";
+                }).catch(e => {
+                    document.getElementById("status").innerText = "오류: 마이크 권한이 필요합니다.";
+                });
+        } else if (!isRec && mediaRecorder && mediaRecorder.state === "recording") {
+            mediaRecorder.stop();
+            document.getElementById("status").innerText = "상태: ⏹️ 녹음 완료 및 전송 중...";
+        }
+    </script>
+    """ % ("true" if st.session_state.is_recording else "false")
+    
+    components.html(recording_html, height=60)
 
-    if audio_data and "bytes" in audio_data:
-        raw_bytes = audio_data["bytes"]
-        if st.session_state.get("last_raw_bytes") != raw_bytes:
-            st.session_state.last_raw_bytes = raw_bytes
+    # 쿼리 파라미터로 넘어온 데이터 처리
+    query_params = _get_query_params()
+    if "rec_b64" in query_params:
+        try:
+            raw_b64 = query_params["rec_b64"]
+            if isinstance(raw_b64, (list, tuple)):
+                raw_b64 = raw_b64[0]
+            raw_b64 = unquote_plus(raw_b64)
+            if raw_b64.startswith("data:"):
+                _, b64 = raw_b64.split(",", 1)
+            else:
+                b64 = raw_b64
+            raw_bytes = base64.b64decode(b64)
             wav_bytes = _ensure_wav_bytes(raw_bytes)
             if wav_bytes is not None:
                 st.session_state.recorded_audio_bytes = wav_bytes
                 st.session_state.analysis_data = analyze_audio_bytes(wav_bytes)
                 st.session_state.last_error_msg = None
-            else:
-                st.session_state.last_error_msg = "오디오 포맷 변환 실패: WAV로 변환하지 못했습니다."
+        except Exception as e:
+            st.session_state.last_error_msg = f"오디오 디코딩 실패: {e}"
+        _set_query_params(None)
+        _safe_rerun()
 
     st.write("---")
-    st.write("📁 또는 테스트용 파일 업로드 (권장: WAV)")
-    uploaded_file = st.file_uploader("WAV / WebM / OGG / MP3 파일 업로드", type=["wav", "webm", "ogg", "mp3", "m4a"])
+    st.write("📁 또는 테스트용 파일 업로드")
+    uploaded_file = st.file_uploader("WAV / MP3 파일 업로드", type=["wav", "webm", "ogg", "mp3", "m4a"])
     if uploaded_file is not None:
         file_bytes = uploaded_file.read()
         if st.button("업로드 파일 분석 실행", use_container_width=True):
             wav_bytes = _ensure_wav_bytes(file_bytes)
-            if wav_bytes is None:
-                st.error("업로드한 파일을 WAV로 변환하지 못했습니다. ffmpeg/pydub가 필요합니다.")
-            else:
+            if wav_bytes is not None:
                 st.session_state.recorded_audio_bytes = wav_bytes
                 st.session_state.analysis_data = analyze_audio_bytes(wav_bytes)
                 _safe_rerun()
@@ -409,8 +423,6 @@ with col_scaff:
 
     if st.session_state.analysis_data and "error" not in st.session_state.analysis_data:
         res = st.session_state.analysis_data
-
-        # --- 📊 음성 분석 결과 영역 ---
         st.markdown("##### 📊 음성 데이터 분석 결과 (Acoustic Metrics)")
         
         m1, m2, m3 = st.columns(3)
@@ -418,47 +430,29 @@ with col_scaff:
         m2.metric("🎵 평균 Pitch", f"{res.get('avg_pitch_hz', 0)} Hz")
         m3.metric("📡 SNR (dB)", f"{res.get('snr_db', 0)} dB")
 
-        m4, m5 = st.columns(2)
-        m4.metric("🔊 Signal RMS", f"{res.get('total_rms', 0)}")
-        m5.metric("⏳ 전체 길이", f"{res.get('duration_sec', 0)} 초")
-
-        # 재생 플레이어 및 VAD 타임라인
         if st.session_state.recorded_audio_bytes:
             try:
                 st.audio(st.session_state.recorded_audio_bytes, format="audio/wav")
             except Exception:
                 st.audio(st.session_state.recorded_audio_bytes)
 
-        voicing_data = res.get("voicing_frames", [])
-        if voicing_data:
-            with st.expander("📈 Voice Activity Detection (VAD) 타임라인 보기"):
-                st.line_chart(voicing_data, height=120)
-                st.caption("1: 음성 감지 | 0: 묵음")
-
         st.write("---")
-
-        # --- 🗣️ STT 및 일치율 분석 영역 ---
-        user_transcript = st.text_input(
-            "🗣️ 인식된 사용자 발화 (STT 결과 / 테스트 수정 가능):",
-            value=st.session_state.user_transcript
-        )
+        user_transcript = st.text_input("🗣️ 인식된 사용자 발화:", value=st.session_state.user_transcript)
         st.session_state.user_transcript = user_transcript
 
         accuracy = calculate_accuracy(target_sentence, user_transcript)
         st.metric("🎯 대본 일치율 (Accuracy)", f"{accuracy}%")
 
         if accuracy <= 75.0:
-            st.warning("⚠️ **발화 일치율이 75% 이하입니다.** 아래 어원 비계(Scaffolding) 힌트를 참고하여 다시 시도해보세요!")
-            st.markdown("**🔍 어원 및 어휘 비계(Scaffolding) 힌트:**")
+            st.warning("⚠️ **발화 일치율이 75% 이하입니다.** 어원 비계 힌트를 참고하세요!")
             st.markdown("""
-            * **Accelerate** (v.) [어원: *ac-* (향하여) + *celer* (빠른)] → *속도를 높이다, 가속하다*
-            * **Strategy** (n.) [어원: *stratos* (군대) + *agein* (이끌다)] → *전략, 계획*
-            * **Expand** (v.) [어원: *ex-* (밖으로) + *pandere* (펼치다)] → *확장하다*
+            * **Accelerate** (v.) [어원: *ac-* + *celer*] → *가속하다*
+            * **Strategy** (n.) [어원: *stratos* + *agein*] → *전략*
+            * **Expand** (v.) [어원: *ex-* + *pandere*] → *확장하다*
             """)
         else:
-            st.success("🎉 **발화 일치율이 75%를 초과했습니다!** 훌륭합니다. 비계 힌트 없이도 완벽하게 발화하셨습니다.")
-
+            st.success("🎉 **발화 일치율 75% 초과!** 완벽합니다.")
     elif st.session_state.analysis_data and "error" in st.session_state.analysis_data:
         st.error(st.session_state.analysis_data["error"])
     else:
-        st.info("👈 좌측에서 음성을 녹음하거나 파일 분석을 진행하면 이 위치에 음성 분석 결과와 비계(Scaffolding) 힌트가 출력됩니다.")
+        st.info("👈 좌측 상단의 '녹음 시작'과 '녹음 정지' 버튼을 눌러 음성 분석을 시작하세요.")
