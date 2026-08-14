@@ -271,17 +271,17 @@ if "last_error_msg" not in st.session_state:
     st.session_state.last_error_msg = None
 if "user_transcript" not in st.session_state:
     st.session_state.user_transcript = "We need accelerate business strategy to expand."
-if "is_recording" not in st.session_state:
-    st.session_state.is_recording = False
+if "is_recording_active" not in st.session_state:
+    st.session_state.is_recording_active = False
 
 st.title("🛡️ 특허 1호 MVP: 음성 Latency 분석 및 자동 역번역 비계 튜터")
 st.caption("AI-Powered Voice Scaffolding & Real-time Acoustic Latency Analyzer")
 
 st.sidebar.subheader("💡 학습 가이드")
 st.sidebar.info("""
-1. 마이크 녹음 버튼을 눌러 음성을 녹음하세요.
-2. '🎙️ 테스트용 사운드'의 AI 음성 생성 버튼을 누르면 테스트용 오디오와 분석 결과가 제공됩니다.
-3. 생성된 오디오 플레이어의 재생 버튼을 눌러 소리를 확인하세요.
+1. 아래 [🔴 녹음 시작] 버튼을 누르면 즉시 녹음 상태가 활성화됩니다.
+2. 발화 완료 후 [⏹️ 녹음 중지 및 분석]을 누르면 결과가 출력됩니다.
+3. 테스트용 AI 음성 생성 기능도 이용할 수 있습니다.
 """)
 
 if st.session_state.last_error_msg:
@@ -303,12 +303,12 @@ with col_rec:
         .recording-badge {
             background-color: #ff4b4b;
             color: white;
-            padding: 6px 12px;
+            padding: 8px 14px;
             border-radius: 6px;
             font-size: 14px;
             font-weight: bold;
             display: inline-block;
-            margin-bottom: 10px;
+            margin-bottom: 12px;
             animation: pulse 1.2s infinite;
         }
         @keyframes pulse {
@@ -319,32 +319,19 @@ with col_rec:
         </style>
     """, unsafe_allow_html=True)
 
-    # 녹음 중 상태일 때만 뱃지 출력
-    if st.session_state.is_recording:
-        st.markdown('<div class="recording-badge">🔴 녹음 중... 마이크에 대고 말씀하세요</div>', unsafe_allow_html=True)
-        if st.button("⏹️ 녹음 중지 및 분석", type="primary", use_container_width=True):
-            st.session_state.is_recording = False
-            st.toast("녹음이 중지되었습니다.")
+    # 녹음 상태에 따른 인터페이스 분기
+    if not st.session_state.is_recording_active:
+        if st.button("🎙️ 녹음 시작하기", type="primary", use_container_width=True):
+            st.session_state.is_recording_active = True
             _safe_rerun()
     else:
-        if st.button("🎙️ 녹음 시작", use_container_width=True):
-            st.session_state.is_recording = True
+        # 🔴 녹음 중 상태일 때만 화면에 노출되는 영역
+        st.markdown('<div class="recording-badge">🔴 녹음 중 상태 안내 영역: 마이크에 대고 말씀하세요...</div>', unsafe_allow_html=True)
+        
+        if st.button("⏹️ 녹음 중지 및 분석", type="secondary", use_container_width=True):
+            st.session_state.is_recording_active = False
+            st.toast("녹음이 완료되어 분석을 수행합니다.")
             _safe_rerun()
-
-    # 기본 st.audio_input 활용 영역 (대체 또는 병행)
-    audio_file = st.audio_input("마이크 직접 녹음기")
-
-    if audio_file is not None:
-        raw_bytes = audio_file.read()
-        if st.session_state.get("last_raw_bytes") != raw_bytes:
-            st.session_state.last_raw_bytes = raw_bytes
-            wav_bytes = _ensure_wav_bytes(raw_bytes)
-            if wav_bytes is not None:
-                st.session_state.recorded_audio_bytes = wav_bytes
-                st.session_state.analysis_data = analyze_audio_bytes(wav_bytes)
-                st.session_state.last_error_msg = None
-            else:
-                st.session_state.last_error_msg = "오디오 포맷 변환 실패: WAV로 변환하지 못했습니다."
 
     st.write("---")
     
@@ -390,7 +377,7 @@ with col_rec:
         st.session_state.recorded_audio_bytes = None
         st.session_state.analysis_data = None
         st.session_state.last_error_msg = None
-        st.session_state.is_recording = False
+        st.session_state.is_recording_active = False
         st.toast("녹음 데이터와 분석 결과가 초기화되었습니다.")
         _safe_rerun()
 
