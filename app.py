@@ -7,19 +7,16 @@ import struct
 import subprocess
 import wave
 from io import BytesIO
-from urllib.parse import unquote_plus
-
-from typing import List, Optional, Tuple, Dict
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 import streamlit as st
-import streamlit.components.v1 as components
+from streamlit_mic_recorder import mic_recorder
 
 # Optional libs detection
 _have_pydub = False
 _have_imageio_ffmpeg = False
 _have_librosa = False
-_have_crepe = False
 _have_webrtcvad = False
 
 try:
@@ -41,12 +38,6 @@ except Exception:
     librosa = None
 
 try:
-    import crepe  # type: ignore
-    _have_crepe = True
-except Exception:
-    crepe = None
-
-try:
     import webrtcvad  # type: ignore
     _have_webrtcvad = True
 except Exception:
@@ -54,46 +45,13 @@ except Exception:
 
 
 # ---------------------------
-# Streamlit config & helpers
+# Streamlit config
 # ---------------------------
 st.set_page_config(
     page_title="Patent #1 MVP - Voice Scaffolding & Latency Analyzer",
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
-def _get_query_params():
-    if hasattr(st, "get_query_params"):
-        return st.get_query_params()
-    if hasattr(st, "experimental_get_query_params"):
-        return st.experimental_get_query_params()
-    if hasattr(st, "query_params"):
-        return st.query_params
-    return {}
-
-def _set_query_params(params: Optional[dict] = None):
-    if params is None:
-        if hasattr(st, "set_query_params"):
-            try:
-                st.set_query_params()
-            except TypeError:
-                st.set_query_params(**{})
-        elif hasattr(st, "experimental_set_query_params"):
-            try:
-                st.experimental_set_query_params()
-            except TypeError:
-                st.experimental_set_query_params(**{})
-        return
-    if hasattr(st, "set_query_params"):
-        st.set_query_params(**params)
-    elif hasattr(st, "experimental_set_query_params"):
-        st.experimental_set_query_params(**params)
-
-def _safe_rerun():
-    if hasattr(st, "experimental_rerun"):
-        st.experimental_rerun()
-    elif hasattr(st, "rerun"):
-        st.rerun()
 
 
 # ---------------------------
@@ -250,7 +208,6 @@ def fallback_vad(samples: np.ndarray, sr: int, frame_duration_ms: int = 30, ener
 # Text Similarity Helper
 # ---------------------------
 def calculate_accuracy(target_text: str, user_text: str) -> float:
-    """두 문장 간의 유사도(0.0 ~ 100.0%)를 계산합니다."""
     t_clean = target_text.strip().lower()
     u_clean = user_text.strip().lower()
     if not u_clean:
@@ -324,198 +281,14 @@ def analyze_audio_bytes(raw_audio_bytes: bytes) -> Dict:
 
 
 # ---------------------------
-# Recorder HTML/JS (component)
-# ---------------------------
-def render_html_recorder(height: int = 240):
-    html = """
-<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; text-align: center; padding: 12px; border: 1px solid #cbd5e1; border-radius: 12px; background: #f8fafc;">
-  <div style="margin-bottom:8px;">
-    <div id="status" style="font-size:14px;color:#64748b;">대기 중...</div>
-  </div>
-  <div style="display:flex;gap:8px;justify-content:center;">
-    <button id="startBtn" style="background:#16a34a;color:white;padding:8px 14px;border:none;border-radius:8px;cursor:pointer;">🔴 녹음 시작</button>
-    <button id="stopBtn" disabled style="background:#94a3b8;color:#ffffff;padding:8px 14px;border:none;border-radius:8px;cursor:default;">⏹️ 녹음 정지</button>
-  </div>
-  <div style="margin-top:8px;font-size:12px;color:#475569;">주의: URL 전송 방식은 긴 녹음에 실패할 수 있습니다. 짧은 문장(수초) 권장.</div>
-</div>
-
-<script>
-let mediaRecorder = null;
-let localStream = null;
-let chunks = [];
-
-const startBtn = document.getElementById('startBtn');
-const stopBtn = document.getElementById('stopBtn');
-const status = document.getElementById('status');
-
-function getTodayString() {
-  const today = new Date();
-  const year = today.getFullYear();
-  const month = String(today.getMonth() + 1).padStart(2, '0');
-  const day = String(today.getDate()).padStart(2, '0');
-  return `${year}${month}${day}`;
-}
-
-function downloadBlob(blob, filename) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.style.display = 'none';
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => { URL.revokeObjectURL(url); document.body.removeChild(a); }, 1000);
-}
-
-startBtn.onclick = async () => {
-  chunks = [];
-  status.innerText = "🎙️ 녹음 중...";
-  startBtn.disabled = true;
-  startBtn.style.cursor = "default";
-  
-  stopBtn.disabled = false;
-  stopBtn.style.background = "#ef4444";
-  stopBtn.style.cursor = "pointer";
-
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    localStream = stream;
-    try {
-      if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm')) {
-        mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-      } else {
-        mediaRecorder = new MediaRecorder(stream);
-      }
-    } catch (err) {
-      mediaRecorder = new MediaRecorder(stream);
-    }
-
-    mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunks.push(e.data); };
-
-    mediaRecorder.onstop = () => {
-      status.innerText = "⚙️ 데이터 처리 중...";
-      const blob = new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' });
-      const reader = new FileReader();
-      reader.readAsDataURL(blob);
-      
-      const dateStr = getTodayString();
-      const defaultFilename = `${dateStr}_record.webm`;
-
-      reader.onloadend = () => {
-        const dataUrl = reader.result;
-        try {
-          const url = new URL(window.parent.location.href);
-          url.searchParams.set('rec_b64', dataUrl);
-          try {
-            window.parent.location.replace(url.toString());
-            return;
-          } catch (err) {}
-          try {
-            window.top.location.replace(url.toString());
-            return;
-          } catch (err) {}
-          downloadBlob(blob, defaultFilename);
-          status.innerText = "녹음 파일을 다운로드했습니다. 업로드 기능을 사용하세요.";
-        } catch (e) {
-          downloadBlob(blob, defaultFilename);
-          status.innerText = "오류 발생 — 파일을 다운로드했습니다.";
-        }
-      };
-      try { if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; } } catch (e) {}
-      
-      stopBtn.disabled = true;
-      stopBtn.style.background = "#94a3b8";
-      stopBtn.style.cursor = "default";
-      
-      startBtn.disabled = false;
-      startBtn.style.cursor = "pointer";
-    };
-
-    mediaRecorder.start();
-  } catch (err) {
-    const name = err && err.name ? err.name : '';
-    if (name === 'NotAllowedError' || name === 'SecurityError' || name === 'PermissionDeniedError') {
-      status.innerText = "❌ 마이크 권한이 필요합니다. 브라우저 설정에서 권한을 허용하세요.";
-    } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
-      status.innerText = "❌ 마이크를 찾을 수 없습니다. 장치 연결을 확인하세요.";
-    } else {
-      status.innerText = "❌ 녹음을 시작할 수 없습니다: " + (err && err.message ? err.message : String(err));
-      console.info("Recorder error:", err);
-    }
-    startBtn.disabled = false;
-    startBtn.style.cursor = "pointer";
-    
-    stopBtn.disabled = true;
-    stopBtn.style.background = "#94a3b8";
-    stopBtn.style.cursor = "default";
-  }
-};
-
-stopBtn.onclick = () => {
-  try {
-    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-      mediaRecorder.stop();
-    }
-    if (localStream) {
-      try { localStream.getTracks().forEach(t => t.stop()); } catch (_) {}
-      localStream = null;
-    } else if (mediaRecorder && mediaRecorder.stream) {
-      try { mediaRecorder.stream.getTracks().forEach(t => t.stop()); } catch (_) {}
-    }
-  } catch (e) {
-    console.warn("Stop error:", e);
-  } finally {
-    stopBtn.disabled = true;
-    stopBtn.style.background = "#94a3b8";
-    stopBtn.style.cursor = "default";
-    
-    startBtn.disabled = false;
-    startBtn.style.cursor = "pointer";
-  }
-};
-</script>
-"""
-    components.html(html, height=height, scrolling=False)
-
-
-# ---------------------------
 # Streamlit UI & state
 # ---------------------------
 if "recorded_audio_bytes" not in st.session_state:
     st.session_state.recorded_audio_bytes = None
 if "analysis_data" not in st.session_state:
     st.session_state.analysis_data = None
-if "last_error_msg" not in st.session_state:
-    st.session_state.last_error_msg = None
 if "user_transcript" not in st.session_state:
     st.session_state.user_transcript = "We need accelerate business strategy to expand."
-
-# Handle incoming rec_b64 query param
-query_params = _get_query_params()
-if "rec_b64" in query_params:
-    try:
-        raw_b64 = query_params["rec_b64"]
-        if isinstance(raw_b64, (list, tuple)):
-            raw_b64 = raw_b64[0]
-        raw_b64 = unquote_plus(raw_b64)
-        if raw_b64.startswith("data:"):
-            _, b64 = raw_b64.split(",", 1)
-        else:
-            b64 = raw_b64
-        raw_bytes = base64.b64decode(b64)
-        wav_bytes = _ensure_wav_bytes(raw_bytes)
-        if wav_bytes is None:
-            st.session_state.last_error_msg = "오디오 포맷 변환 실패: 서버에서 WAV로 변환하지 못했습니다. ffmpeg/pydub 필요."
-            st.session_state.analysis_data = {"error": "Conversion to WAV failed"}
-            st.session_state.recorded_audio_bytes = None
-        else:
-            st.session_state.recorded_audio_bytes = wav_bytes
-            st.session_state.analysis_data = analyze_audio_bytes(wav_bytes)
-            st.session_state.last_error_msg = None
-    except Exception as e:
-        st.session_state.last_error_msg = f"음성 데이터 디코딩 실패: {e}"
-    _set_query_params(None)
-    _safe_rerun()
 
 # --- Header ---
 st.title("🛡️ 특허 1호 MVP: 음성 Latency 분석 및 자동 역번역 비계 튜터")
@@ -524,13 +297,10 @@ st.caption("AI-Powered Voice Scaffolding & Real-time Acoustic Latency Analyzer")
 # --- Sidebar ---
 st.sidebar.subheader("💡 학습 가이드")
 st.sidebar.info("""
-1. 마이크로 음성을 녹음하거나 오디오 파일을 업로드하세요.
-2. 우측 비계(Scaffolding) 영역에서 음성의 Latency, Pitch 등 분석 결과가 즉시 출력됩니다.
+1. 버튼을 눌러 음성을 녹음하세요 (시간 제한 없음).
+2. 우측 비계(Scaffolding) 영역에서 음성의 Latency, Pitch 등 분석 결과가 출력됩니다.
 3. **학습 지문 대비 대본 일치율이 75% 이하일 때만 학습용 어원 힌트(Scaffolding)가 표시됩니다.**
 """)
-
-if st.session_state.last_error_msg:
-    st.error(st.session_state.last_error_msg)
 
 # 학습 지문 문장 정의
 target_sentence = "We need to accelerate our business strategy to expand market share."
@@ -543,26 +313,43 @@ with col_rec:
     st.markdown(f"> \"{target_sentence}\"")
     
     st.subheader("1. 실시간 음성 수신")
-    render_html_recorder(260)
+    st.write("버튼을 눌러 녹음하세요 (시간 제약 없음):")
+    
+    # 🎙️ Streamlit Mic Recorder Component (대용량/긴 녹음 완벽 지원)
+    audio_data = mic_recorder(
+        start_prompt="🔴 녹음 시작",
+        stop_prompt="⏹️ 녹음 정지",
+        key="mic_recorder",
+    )
+
+    if audio_data and "bytes" in audio_data:
+        raw_bytes = audio_data["bytes"]
+        # 이전에 분석했던 데이터와 다를 경우만 재분석
+        if st.session_state.get("last_raw_bytes") != raw_bytes:
+            st.session_state.last_raw_bytes = raw_bytes
+            wav_bytes = _ensure_wav_bytes(raw_bytes)
+            if wav_bytes is not None:
+                st.session_state.recorded_audio_bytes = wav_bytes
+                st.session_state.analysis_data = analyze_audio_bytes(wav_bytes)
+            else:
+                st.error("오디오 변환 실패: WAV로 변환하지 못했습니다.")
 
     st.write("---")
-    st.write("📁 또는 테스트용 파일 업로드 (권장: WAV)")
+    st.write("📁 또는 파일 업로드 (권장: WAV)")
     uploaded_file = st.file_uploader("WAV / WebM / OGG / MP3 파일 업로드", type=["wav", "webm", "ogg", "mp3", "m4a"])
     if uploaded_file is not None:
         file_bytes = uploaded_file.read()
         if st.button("업로드 파일 분석 실행", use_container_width=True):
             wav_bytes = _ensure_wav_bytes(file_bytes)
             if wav_bytes is None:
-                st.error("업로드한 파일을 WAV로 변환하지 못했습니다. ffmpeg/pydub가 필요합니다.")
+                st.error("업로드한 파일을 WAV로 변환하지 못했습니다.")
             else:
                 st.session_state.recorded_audio_bytes = wav_bytes
                 st.session_state.analysis_data = analyze_audio_bytes(wav_bytes)
-                _safe_rerun()
 
 with col_scaff:
     st.subheader("2. AI 자동 역번역 비계 (Scaffolding)")
 
-    # [수정] 분석 데이터가 있는 경우, 분석 지표를 비계 영역 상단에 출력
     if st.session_state.analysis_data and "error" not in st.session_state.analysis_data:
         res = st.session_state.analysis_data
 
