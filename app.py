@@ -308,8 +308,8 @@ st.caption("AI-Powered Voice Scaffolding & Real-time Acoustic Latency Analyzer")
 
 st.sidebar.subheader("💡 학습 가이드")
 st.sidebar.info("""
-1. '녹음 시작' 버튼을 눌러 마이크 녹음을 진행하세요.
-2. 발화가 끝나면 '녹음 정지' 버튼을 누르세요.
+1. '녹음 시작'과 '녹음 정지' 버튼을 눌러 음성을 녹음하세요.
+2. 파일 업로드 후 분석을 실행하거나 초기화할 수 있습니다.
 3. 우측 비계 영역에서 분석 결과와 어원 힌트가 출력됩니다.
 """)
 
@@ -326,9 +326,7 @@ with col_rec:
     
     st.subheader("1. 실시간 음성 수신")
     
-    # 🔴 "녹음 시작"과 "⏹️ 녹음 정지" 버튼 분리 레이아웃
     r_col1, r_col2 = st.columns(2)
-    
     with r_col1:
         if st.button("🔴 녹음 시작", use_container_width=True):
             st.session_state.is_recording = True
@@ -339,16 +337,13 @@ with col_rec:
             st.session_state.is_recording = False
             st.toast("마이크 녹음이 중지되었습니다.")
 
-    # 브라우저 MediaRecorder API를 직접 주입하여 완벽하게 분리된 녹음 기능 수행
     recording_html = """
     <div>
-        <button id="recordBtn" style="display:none;"></button>
-        <p id="status" style="font-weight:bold; color:#555;">상태: 대기 중</p>
+        <p id="status" style="font-weight:bold; color:#555; font-size: 14px;">상태: 대기 중</p>
     </div>
     <script>
         let mediaRecorder;
         let audioChunks = [];
-        
         const isRec = %s;
         
         if (isRec && (!mediaRecorder || mediaRecorder.state === "inactive")) {
@@ -372,7 +367,7 @@ with col_rec:
                     mediaRecorder.start();
                     document.getElementById("status").innerText = "상태: 🔴 녹음 중...";
                 }).catch(e => {
-                    document.getElementById("status").innerText = "오류: 마이크 권한이 필요합니다.";
+                    document.getElementById("status").innerText = "오류: 마이크 권한 필요";
                 });
         } else if (!isRec && mediaRecorder && mediaRecorder.state === "recording") {
             mediaRecorder.stop();
@@ -381,9 +376,8 @@ with col_rec:
     </script>
     """ % ("true" if st.session_state.is_recording else "false")
     
-    components.html(recording_html, height=60)
+    components.html(recording_html, height=45)
 
-    # 쿼리 파라미터로 넘어온 데이터 처리
     query_params = _get_query_params()
     if "rec_b64" in query_params:
         try:
@@ -417,6 +411,15 @@ with col_rec:
                 st.session_state.recorded_audio_bytes = wav_bytes
                 st.session_state.analysis_data = analyze_audio_bytes(wav_bytes)
                 _safe_rerun()
+
+    # ✨ [추가된 부분] 테스트용 파일 업로드 칸 아래 녹음 데이터 초기화 버튼
+    if st.button("🔄 녹음 데이터 초기화", use_container_width=True):
+        st.session_state.recorded_audio_bytes = None
+        st.session_state.analysis_data = None
+        st.session_state.last_error_msg = None
+        st.session_state.is_recording = False
+        st.toast("녹음 데이터와 분석 결과가 초기화되었습니다.")
+        _safe_rerun()
 
 with col_scaff:
     st.subheader("2. AI 자동 역번역 비계 (Scaffolding)")
