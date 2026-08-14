@@ -248,7 +248,7 @@ def analyze_audio_bytes(raw_audio_bytes: bytes) -> Dict:
         avg_pitch = estimate_pitch_autocorr(samples, sr)
 
     return {
-        "duration_sec": round(duration_sec, 2),
+        "duration_sec": round(duration_sec, 1),  # 0.1초 단위 반올림
         "total_rms": round(total_rms, 6),
         "zcr": round(zcr, 6),
         "snr_db": round(snr_db, 2),
@@ -312,7 +312,7 @@ with col_rec:
 
     st.write("---")
     
-    # 🎙️ 테스트용 사운드 영역 (플레이어 칸은 제거하고 생성 버튼만 유지)
+    # 🎙️ 테스트용 사운드 영역
     st.subheader("🎙️ 테스트용 사운드")
     
     if st.button("🔊 테스트용 AI 음성 및 분석 생성", use_container_width=True):
@@ -358,16 +358,15 @@ with col_scaff:
 
     if st.session_state.analysis_data and "error" not in st.session_state.analysis_data:
         res = st.session_state.analysis_data
-        st.markdown("##### 📊 음성 데이터 분석 결과 (Acoustic Metrics)")
+        st.markdown("##### 📊 음성 데이터 분석 결과")
         
-        m1, m2, m3 = st.columns(3)
-        m1.metric("⏱️ 음성 Latency", f"{res.get('latency_ms', 0)} ms")
-        m2.metric("🎵 평균 Pitch", f"{res.get('avg_pitch_hz', 0)} Hz")
-        m3.metric("📡 SNR (dB)", f"{res.get('snr_db', 0)} dB")
+        # 녹음 시간만 0.1초 단위(소수점 첫째 자리)로 표시
+        duration_val = res.get('duration_sec', 0.0)
+        st.metric("⏱️ 녹음 시간", f"{duration_val:.1f} 초")
 
         st.write("---")
         
-        # 🔊 사용자가 녹음한 오디오 재생 플레이어 배치
+        # 🔊 사용자가 녹음한 오디오 재생 플레이어
         if st.session_state.recorded_audio_bytes:
             st.markdown("🔊 **내 녹음 듣기:**")
             st.audio(st.session_state.recorded_audio_bytes, format="audio/wav")
