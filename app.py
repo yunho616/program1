@@ -281,7 +281,7 @@ st.caption("AI-Powered Voice Scaffolding & Real-time Acoustic Latency Analyzer")
 st.sidebar.subheader("💡 학습 가이드")
 st.sidebar.info("""
 1. 마이크 녹음 버튼을 눌러 음성을 녹음하세요.
-2. '테스트용 사운드' 영역에서 AI 음성을 들어볼 수 있습니다.
+2. '🎙️ 테스트용 사운드'의 AI 목소리 듣기를 누르면 테스트용 분석 결과가 나타납니다.
 3. 우측 비계 영역에서 분석 결과와 어원 힌트가 출력됩니다.
 """)
 
@@ -314,11 +314,36 @@ with col_rec:
 
     st.write("---")
     
-    # 📁 테스트용 사운드 (AI 음성 듣기 기능만 남김)
-    st.subheader("📁 테스트용 사운드")
+    # 📁 변경된 텍스트: 🎙️ 테스트용 사운드
+    st.subheader("🎙️ 테스트용 사운드")
     
     if st.button("🔊 '안녕하세요' AI 목소리 듣기", use_container_width=True):
         st.session_state.trigger_tts = True
+        
+        # 임의의 더미 WAV 바이트 생성 (1초짜리 무음 WAV 파일 구조)
+        dummy_io = BytesIO()
+        with wave.open(dummy_io, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(16000)
+            wf.writeframes(b"\x00" * 32000)
+        st.session_state.recorded_audio_bytes = dummy_io.getvalue()
+
+        # 임의의 분석 데이터 설정
+        st.session_state.analysis_data = {
+            "duration_sec": 1.0,
+            "total_rms": 0.0523,
+            "zcr": 0.0812,
+            "snr_db": 18.5,
+            "latency_ms": 120.0,
+            "avg_pitch_hz": 215.4,
+            "sample_rate": 16000,
+            "num_samples": 16000,
+            "voicing_frames": [1, 1, 0, 1]
+        }
+        st.session_state.user_transcript = "We need accelerate business strategy to expand."
+        st.toast("테스트용 임의 분석 데이터가 적용되었습니다!")
+        _safe_rerun()
     else:
         st.session_state.trigger_tts = False
 
@@ -382,4 +407,4 @@ with col_scaff:
     elif st.session_state.analysis_data and "error" in st.session_state.analysis_data:
         st.error(st.session_state.analysis_data["error"])
     else:
-        st.info("👈 좌측에서 마이크로 음성을 녹음하거나 AI 음성을 생성하여 테스트해 보세요.")
+        st.info("👈 좌측에서 마이크로 음성을 녹음하거나 '테스트용 사운드' 버튼을 눌러 테스트해 보세요.")
