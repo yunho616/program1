@@ -7,12 +7,10 @@ import struct
 import subprocess
 import wave
 from io import BytesIO
-from urllib.parse import unquote_plus
 from typing import List, Optional, Tuple, Dict
 
 import numpy as np
 import streamlit as st
-import streamlit.components.v1 as components
 
 # Optional libs detection
 _have_pydub = False
@@ -53,33 +51,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
-def _get_query_params():
-    if hasattr(st, "get_query_params"):
-        return st.get_query_params()
-    if hasattr(st, "experimental_get_query_params"):
-        return st.experimental_get_query_params()
-    if hasattr(st, "query_params"):
-        return st.query_params
-    return {}
-
-def _set_query_params(params: Optional[dict] = None):
-    if params is None:
-        if hasattr(st, "set_query_params"):
-            try:
-                st.set_query_params()
-            except TypeError:
-                st.set_query_params(**{})
-        elif hasattr(st, "experimental_set_query_params"):
-            try:
-                st.experimental_set_query_params()
-            except TypeError:
-                st.experimental_set_query_params(**{})
-        return
-    if hasattr(st, "set_query_params"):
-        st.set_query_params(**params)
-    elif hasattr(st, "experimental_set_query_params"):
-        st.experimental_set_query_params(**params)
 
 def _safe_rerun():
     if hasattr(st, "experimental_rerun"):
@@ -300,16 +271,14 @@ if "last_error_msg" not in st.session_state:
     st.session_state.last_error_msg = None
 if "user_transcript" not in st.session_state:
     st.session_state.user_transcript = "We need accelerate business strategy to expand."
-if "is_recording" not in st.session_state:
-    st.session_state.is_recording = False
 
 st.title("🛡️ 특허 1호 MVP: 음성 Latency 분석 및 자동 역번역 비계 튜터")
 st.caption("AI-Powered Voice Scaffolding & Real-time Acoustic Latency Analyzer")
 
 st.sidebar.subheader("💡 학습 가이드")
 st.sidebar.info("""
-1. '녹음 시작'과 '녹음 정지' 버튼을 눌러 음성을 녹음하세요.
-2. 파일 업로드 후 분석을 실행하거나 초기화할 수 있습니다.
+1. 아래 마이크 녹음 버튼을 눌러 음성을 녹음하세요.
+2. 녹음이 끝나면 자동으로 음성이 등록됩니다.
 3. 우측 비계 영역에서 분석 결과와 어원 힌트가 출력됩니다.
 """)
 
@@ -324,81 +293,22 @@ with col_rec:
     st.markdown("**🎯 오늘의 학습 지문:**")
     st.markdown(f"> \"{target_sentence}\"")
     
-    st.subheader("1. 실시간 음성 수신")
+    st.subheader("1. 마이크 실시간 녹음")
     
-    r_col1, r_col2 = st.columns(2)
-    with r_col1:
-        if st.button("🔴 녹음 시작", use_container_width=True):
-            st.session_state.is_recording = True
-            st.toast("마이크 녹음이 시작되었습니다!")
-            
-    with r_col2:
-        if st.button("⏹️ 녹음 정지", use_container_width=True):
-            st.session_state.is_recording = False
-            st.toast("마이크 녹음이 중지되었습니다.")
+    # ✨ Streamlit 공식 마이크 녹음 컴포넌트 사용
+    audio_file = st.audio_input("🔴 마이크 녹음하기")
 
-    recording_html = """
-    <div>
-        <p id="status" style="font-weight:bold; color:#555; font-size: 14px;">상태: 대기 중</p>
-    </div>
-    <script>
-        let mediaRecorder;
-        let audioChunks = [];
-        const isRec = %s;
-        
-        if (isRec && (!mediaRecorder || mediaRecorder.state === "inactive")) {
-            navigator.mediaDevices.getUserMedia({ audio: true })
-                .then(stream => {
-                    mediaRecorder = new MediaRecorder(stream);
-                    audioChunks = [];
-                    mediaRecorder.ondataavailable = event => {
-                        audioChunks.push(event.data);
-                    };
-                    mediaRecorder.onstop = () => {
-                        const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
-                        const reader = new FileReader();
-                        reader.readAsDataURL(audioBlob);
-                        reader.onloadend = () => {
-                            const base64data = reader.result;
-                            const queryParam = "?rec_b64=" + encodeURIComponent(base64data);
-                            window.parent.location.search = queryParam;
-                        };
-                    };
-                    mediaRecorder.start();
-                    document.getElementById("status").innerText = "상태: 🔴 녹음 중...";
-                }).catch(e => {
-                    document.getElementById("status").innerText = "오류: 마이크 권한 필요";
-                });
-        } else if (!isRec && mediaRecorder && mediaRecorder.state === "recording") {
-            mediaRecorder.stop();
-            document.getElementById("status").innerText = "상태: ⏹️ 녹음 완료 및 전송 중...";
-        }
-    </script>
-    """ % ("true" if st.session_state.is_recording else "false")
-    
-    components.html(recording_html, height=45)
-
-    query_params = _get_query_params()
-    if "rec_b64" in query_params:
-        try:
-            raw_b64 = query_params["rec_b64"]
-            if isinstance(raw_b64, (list, tuple)):
-                raw_b64 = raw_b64[0]
-            raw_b64 = unquote_plus(raw_b64)
-            if raw_b64.startswith("data:"):
-                _, b64 = raw_b64.split(",", 1)
-            else:
-                b64 = raw_b64
-            raw_bytes = base64.b64decode(b64)
+    if audio_file is not None:
+        raw_bytes = audio_file.read()
+        if st.session_state.get("last_raw_bytes") != raw_bytes:
+            st.session_state.last_raw_bytes = raw_bytes
             wav_bytes = _ensure_wav_bytes(raw_bytes)
             if wav_bytes is not None:
                 st.session_state.recorded_audio_bytes = wav_bytes
                 st.session_state.analysis_data = analyze_audio_bytes(wav_bytes)
                 st.session_state.last_error_msg = None
-        except Exception as e:
-            st.session_state.last_error_msg = f"오디오 디코딩 실패: {e}"
-        _set_query_params(None)
-        _safe_rerun()
+            else:
+                st.session_state.last_error_msg = "오디오 포맷 변환 실패: WAV로 변환하지 못했습니다."
 
     st.write("---")
     st.write("📁 또는 테스트용 파일 업로드")
@@ -412,12 +322,10 @@ with col_rec:
                 st.session_state.analysis_data = analyze_audio_bytes(wav_bytes)
                 _safe_rerun()
 
-    # ✨ [추가된 부분] 테스트용 파일 업로드 칸 아래 녹음 데이터 초기화 버튼
     if st.button("🔄 녹음 데이터 초기화", use_container_width=True):
         st.session_state.recorded_audio_bytes = None
         st.session_state.analysis_data = None
         st.session_state.last_error_msg = None
-        st.session_state.is_recording = False
         st.toast("녹음 데이터와 분석 결과가 초기화되었습니다.")
         _safe_rerun()
 
@@ -458,4 +366,4 @@ with col_scaff:
     elif st.session_state.analysis_data and "error" in st.session_state.analysis_data:
         st.error(st.session_state.analysis_data["error"])
     else:
-        st.info("👈 좌측 상단의 '녹음 시작'과 '녹음 정지' 버튼을 눌러 음성 분석을 시작하세요.")
+        st.info("👈 좌측에서 마이크로 음성을 녹음하거나 파일을 업로드하면 분석 결과가 출력됩니다.")
