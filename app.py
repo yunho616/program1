@@ -39,7 +39,7 @@ except LookupError:
 from nltk.tokenize import word_tokenize
 from nltk.tag import pos_tag
 
-# OpenAI 라이브러리 임포트
+# OpenAI 라이브러리 임포트 (Whisper API 연동용)
 try:
     import openai
     _have_openai = True
@@ -50,6 +50,7 @@ except ImportError:
 _have_pydub = False
 _have_imageio_ffmpeg = False
 _have_librosa = False
+_have_webrtcvad = False
 
 try:
     from pydub import AudioSegment  # type: ignore
@@ -69,12 +70,18 @@ try:
 except Exception:
     librosa = None
 
+try:
+    import webrtcvad  # type: ignore
+    _have_webrtcvad = True
+except Exception:
+    _have_webrtcvad = False
+
 
 # ---------------------------
 # Streamlit config & helpers
 # ---------------------------
 st.set_page_config(
-    page_title="Patent #1 MVP - Voice Scaffolding",
+    page_title="Patent #1 MVP - Voice Scaffolding & Latency Analyzer",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -85,12 +92,17 @@ def _safe_rerun():
     elif hasattr(st, "rerun"):
         st.rerun()
 
+
+# ---------------------------
+# Audio conversion helper
+# ---------------------------
 def _ensure_wav_bytes(raw_bytes: bytes) -> Optional[bytes]:
     try:
         if raw_bytes[:4] == b"RIFF" and b"WAVE" in raw_bytes[:12]:
             return raw_bytes
     except Exception:
         pass
+
     if _have_pydub:
         try:
             seg = AudioSegment.from_file(io.BytesIO(raw_bytes))
@@ -99,8 +111,35 @@ def _ensure_wav_bytes(raw_bytes: bytes) -> Optional[bytes]:
             return out.getvalue()
         except Exception:
             pass
+
+    ffmpeg_exe = None
+    if _iioffmpeg is not None:
+        try:
+            ffmpeg_exe = _iioffmpeg.get_ffmpeg_exe()
+        except Exception:
+            ffmpeg_exe = None
+    if ffmpeg_exe is None:
+        ffmpeg_exe = shutil.which("ffmpeg")
+
+    if ffmpeg_exe:
+        try:
+            proc = subprocess.run(
+                [ffmpeg_exe, "-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-f", "wav", "pipe:1"],
+                input=raw_bytes,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+            return proc.stdout
+        except Exception:
+            return None
+
     return None
 
+
+# ---------------------------
+# WAV parsing and DSP
+# ---------------------------
 def parse_wav_bytes(wav_bytes: bytes) -> Tuple[np.ndarray, int]:
     with wave.open(BytesIO(wav_bytes), "rb") as wf:
         n_channels = wf.getnchannels()
@@ -108,89 +147,493 @@ def parse_wav_bytes(wav_bytes: bytes) -> Tuple[np.ndarray, int]:
         framerate = wf.getframerate()
         n_frames = wf.getnframes()
         raw_frames = wf.readframes(n_frames)
+
     if n_frames == 0 or framerate == 0:
         return np.array([], dtype=np.float32), framerate
-    
-    samples = np.frombuffer(raw_frames, dtype=np.int16).astype(np.float32) / 32768.0
-    if n_channels > 1:
-        samples = samples.reshape(-1, n_channels).mean(axis=1)
+
+    if sampwidth == 2:
+        fmt = f"<{n_frames * n_channels}h"
+        try:
+            samples = np.array(struct.unpack(fmt, raw_frames), dtype=np.float32) / 32768.0
+        except struct.error:
+            samples = np.frombuffer(raw_frames, dtype=np.int16).astype(np.float32) / 32768.0
+    elif sampwidth == 1:
+        fmt = f"<{n_frames * n_channels}B"
+        try:
+            usamps = np.array(struct.unpack(fmt, raw_frames), dtype=np.float32)
+        except struct.error:
+            usamps = np.frombuffer(raw_frames, dtype=np.uint8).astype(np.float32)
+        samples = (usamps - 128.0) / 128.0
+    else:
+        try:
+            samples = np.frombuffer(raw_frames, dtype=np.int16).astype(np.float32) / 32768.0
+        except Exception:
+            samples = np.array([], dtype=np.float32)
+
+    if n_channels > 1 and samples.size:
+        try:
+            samples = samples.reshape(-1, n_channels).mean(axis=1)
+        except Exception:
+            pass
+
     return samples, framerate
 
+
 def compute_rms(samples: np.ndarray) -> float:
+    if samples.size == 0:
+        return 0.0
     return float(np.sqrt(np.mean(samples ** 2) + 1e-12))
 
-def fallback_vad(samples: np.ndarray, sr: int) -> np.ndarray:
-    frame_size = int(sr * 0.03)
-    voicing = [1 if compute_rms(samples[i:i+frame_size]) > 0.015 else 0 for i in range(0, len(samples), frame_size)]
+
+def compute_zcr(samples: np.ndarray) -> float:
+    if samples.size < 2:
+        return 0.0
+    z = np.sum(np.abs(np.diff(np.sign(samples)))) / 2.0
+    return float(z / max(1, samples.size - 1))
+
+
+def compute_snr(samples: np.ndarray) -> float:
+    rms_total = compute_rms(samples)
+    if rms_total < 1e-6:
+        return 0.0
+    se = np.sort(np.abs(samples))
+    bottom = np.mean(se[: max(1, int(len(se) * 0.1))])
+    if bottom < 1e-6:
+        bottom = 1e-6
+    snr_db = 20.0 * math.log10(rms_total / bottom)
+    return float(max(0.0, snr_db))
+
+
+def estimate_pitch_autocorr(samples: np.ndarray, sr: int) -> float:
+    if samples.size < 256:
+        return 0.0
+    n = len(samples)
+    x = samples - np.mean(samples)
+    f = np.fft.fft(x, n=2 * n)
+    power = np.abs(f) ** 2
+    autocorr = np.fft.ifft(power).real[:n]
+    if autocorr.size == 0 or autocorr[0] == 0:
+        return 0.0
+    min_lag = max(1, int(sr / 400))
+    max_lag = min(len(autocorr) - 1, int(sr / 50))
+    if min_lag >= max_lag:
+        return 0.0
+    segment = autocorr[min_lag : max_lag + 1]
+    if segment.size == 0:
+        return 0.0
+    peak_rel = int(np.argmax(segment))
+    peak_idx = min_lag + peak_rel
+    reliability = float(autocorr[peak_idx] / (autocorr[0] + 1e-12))
+    if reliability > 0.2 and peak_idx > 0:
+        return float(sr / peak_idx)
+    return 0.0
+
+
+def fallback_vad(samples: np.ndarray, sr: int, frame_duration_ms: int = 30, energy_threshold: float = 0.015) -> np.ndarray:
+    frame_size = int(sr * (frame_duration_ms / 1000.0))
+    if frame_size <= 0:
+        return np.array([], dtype=int)
+    voicing = []
+    for i in range(0, len(samples), frame_size):
+        frame = samples[i : i + frame_size]
+        if frame.size == 0:
+            continue
+        rms = compute_rms(frame)
+        voicing.append(1 if rms > energy_threshold else 0)
     return np.array(voicing, dtype=int)
+
 
 def calculate_word_accuracy_details(target_text: str, user_text: str) -> Tuple[float, int, int, List[str]]:
     target_words = [w.strip(".,?!") for w in target_text.strip().lower().split() if w.strip()]
     user_words = [w.strip(".,?!") for w in user_text.strip().lower().split() if w.strip()]
-    if not target_words: return 0.0, 0, 0, []
+    
+    total_words = len(target_words)
+    if total_words == 0:
+        return 0.0, 0, 0, []
+
     matcher = difflib.SequenceMatcher(None, target_words, user_words)
-    correct_count = sum(i2 - i1 for tag, i1, i2, j1, j2 in matcher.get_opcodes() if tag == 'equal')
-    wrong_words = [target_words[idx] for tag, i1, i2, j1, j2 in matcher.get_opcodes() if tag in ('replace', 'delete') for idx in range(i1, i2)]
-    return round((correct_count / len(target_words)) * 100.0, 1), correct_count, len(target_words) - correct_count, wrong_words
+    
+    correct_count = 0
+    wrong_words = []
+    
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == 'equal':
+            correct_count += (i2 - i1)
+        elif tag in ('replace', 'delete'):
+            for idx in range(i1, i2):
+                wrong_words.append(target_words[idx])
+        elif tag == 'insert':
+            pass
+
+    if correct_count > total_words:
+        correct_count = total_words
+        
+    wrong_count = total_words - correct_count
+    accuracy = round((correct_count / total_words) * 100.0, 1)
+    
+    return accuracy, correct_count, wrong_count, wrong_words
+
 
 # ---------------------------
-# STT 및 분석 함수
+# 실제 OpenAI Whisper API를 이용한 STT 및 단어별 Latency 분석 함수
 # ---------------------------
-def analyze_audio_with_whisper(wav_bytes: bytes, api_key: str) -> Dict:
-    if not _have_openai or not api_key:
-        return {"transcript": "OpenAI API Key가 설정되지 않았습니다. 사이드바에서 설정해주세요."}
+def analyze_audio_with_whisper(wav_bytes: bytes, api_key: Optional[str] = None) -> Dict:
     try:
-        client = openai.OpenAI(api_key=api_key)
-        transcript_obj = client.audio.transcriptions.create(
-            model="whisper-1", file=("audio.wav", wav_bytes), response_format="verbose_json", timestamp_granularities=["word"]
-        )
-        words_info = getattr(transcript_obj, "words", [])
-        word_latencies = [(w.get("word", "").strip(), round(w.get("start", 0.0) - (words_info[i-1].get("end", 0.0) if i > 0 else 0), 1)) for i, w in enumerate(words_info)]
-        return {"transcript": transcript_obj.text, "word_latencies": word_latencies}
+        samples, sr = parse_wav_bytes(wav_bytes)
     except Exception as e:
-        return {"transcript": f"오류 발생: {str(e)}"}
+        return {"error": f"WAV parsing failed: {e}"}
+
+    duration_sec = float(len(samples) / sr) if sr > 0 else 0.0
+    total_rms = compute_rms(samples)
+    zcr = compute_zcr(samples)
+    snr_db = compute_snr(samples)
+    voicing = fallback_vad(samples, sr)
+
+    frame_duration_ms = 30
+    first_idx = int(np.argmax(voicing == 1)) if np.any(voicing == 1) else -1
+    latency_ms = float(first_idx * frame_duration_ms) if first_idx >= 0 else 0.0
+
+    if _have_librosa:
+        try:
+            f0, _, _ = librosa.pyin(samples.astype(np.float32), fmin=50, fmax=400, sr=sr)
+            valid = f0[~np.isnan(f0)]
+            avg_pitch = float(np.mean(valid)) if valid.size > 0 else estimate_pitch_autocorr(samples, sr)
+        except Exception:
+            avg_pitch = estimate_pitch_autocorr(samples, sr)
+    else:
+        avg_pitch = estimate_pitch_autocorr(samples, sr)
+
+    result_data = {
+        "duration_sec": round(duration_sec, 1),
+        "total_rms": round(total_rms, 6),
+        "zcr": round(zcr, 6),
+        "snr_db": round(snr_db, 2),
+        "latency_ms": round(latency_ms, 1),
+        "avg_pitch_hz": round(avg_pitch, 1),
+        "sample_rate": sr,
+        "num_samples": samples.size,
+        "voicing_frames": voicing.tolist(),
+        "transcript": "",
+        "word_latencies": [] 
+    }
+
+    resolved_key = api_key or st.session_state.get("openai_api_key") or os.environ.get("OPENAI_API_KEY")
+    if not resolved_key and "openai_api_key" in st.session_state:
+        resolved_key = st.session_state["openai_api_key"]
+
+    if not _have_openai or not resolved_key:
+        result_data["transcript"] = "OpenAI API Key가 설정되지 않았습니다. 사이드바에 키를 입력하고 '확인 및 적용' 버튼을 눌러주세요."
+        return result_data
+
+    try:
+        client = openai.OpenAI(api_key=resolved_key)
+        
+        audio_file = BytesIO(wav_bytes)
+        audio_file.name = "audio.wav"
+
+        transcript_obj = client.audio.transcriptions.create(
+            model="whisper-1",
+            file=audio_file,
+            response_format="verbose_json",
+            timestamp_granularities=["word"]
+        )
+
+        transcript_text = getattr(transcript_obj, "text", "")
+        result_data["transcript"] = transcript_text
+
+        words_info = getattr(transcript_obj, "words", [])
+        word_latencies = []
+        
+        for i in range(len(words_info)):
+            w_item = words_info[i]
+            w_text = w_item.get("word", "").strip()
+            w_start = w_item.get("start", 0.0)
+            
+            if i == 0:
+                gap = round(w_start, 1)
+            else:
+                prev_end = words_info[i-1].get("end", 0.0)
+                gap = round(w_start - prev_end, 1)
+                if gap < 0:
+                    gap = 0.0
+            
+            word_latencies.append((w_text, gap))
+
+        result_data["word_latencies"] = word_latencies
+
+    except Exception as e:
+        result_data["transcript"] = f"STT API 호출 중 오류 발생: {str(e)}"
+
+    return result_data
+
 
 # ---------------------------
-# UI 및 상태관리
+# Streamlit UI & state
 # ---------------------------
-if "openai_api_key" not in st.session_state: st.session_state.openai_api_key = ""
-if "recorded_audio_bytes" not in st.session_state: st.session_state.recorded_audio_bytes = None
-if "analysis_data" not in st.session_state: st.session_state.analysis_data = None
+if "recorded_audio_bytes" not in st.session_state:
+    st.session_state.recorded_audio_bytes = None
+if "analysis_data" not in st.session_state:
+    st.session_state.analysis_data = None
+if "last_error_msg" not in st.session_state:
+    st.session_state.last_error_msg = None
+if "user_transcript" not in st.session_state:
+    st.session_state.user_transcript = ""
+if "openai_api_key" not in st.session_state:
+    st.session_state.openai_api_key = os.environ.get("OPENAI_API_KEY", "")
+if "key_applied" not in st.session_state:
+    st.session_state.key_applied = False
 
-st.title("🛡️ 특허 1호 MVP: 음성 Latency 분석")
+st.title("🛡️ 특허 1호 MVP: 음성 Latency 분석 및 자동 역번역 비계 튜터")
+st.caption("AI-Powered Voice Scaffolding & Real-time Acoustic Latency Analyzer (with Whisper STT)")
 
-# 사이드바 API 설정
-st.sidebar.subheader("💡 설정")
+st.sidebar.subheader("💡 설정 및 학습 가이드")
+
+# 사이드바 API Key 입력 및 버튼 로직
 api_key_input = st.sidebar.text_input("OpenAI API Key", type="password", value=st.session_state.openai_api_key)
 
 if st.sidebar.button("API Key 확인 및 적용"):
-    st.session_state.openai_api_key = api_key_input.strip()
-    st.sidebar.success("✅ 적용 완료")
-    # [핵심] 키 적용 시 이미 녹음된 파일이 있다면 즉시 재분석
-    if st.session_state.recorded_audio_bytes:
-        with st.spinner("재분석 중..."):
-            st.session_state.analysis_data = analyze_audio_with_whisper(st.session_state.recorded_audio_bytes, st.session_state.openai_api_key)
+    if api_key_input.strip():
+        st.session_state.openai_api_key = api_key_input.strip()
+        st.session_state.key_applied = True
+        st.sidebar.success("API Key가 정상적으로 적용되었습니다!")
+        
+        # 키 적용 시 이미 녹음된 파일이 있다면 즉시 재분석 수행
+        if st.session_state.recorded_audio_bytes is not None:
+            st.sidebar.info("🔄 오디오 재분석을 시작합니다...")
+            with st.spinner("OpenAI Whisper STT 재분석 중..."):
+                analysis_res = analyze_audio_with_whisper(st.session_state.recorded_audio_bytes, api_key=st.session_state.openai_api_key)
+                st.session_state.analysis_data = analysis_res
+                st.session_state.user_transcript = analysis_res.get("transcript", "")
+            st.sidebar.success("분석이 완료되었습니다!")
+            _safe_rerun()
+    else:
+        st.sidebar.error("API Key를 입력해주세요.")
+
+if st.session_state.key_applied or st.session_state.openai_api_key:
+    st.sidebar.info("🔑 API Key가 적용된 상태입니다.")
+
+st.sidebar.info("""
+1. OpenAI API Key를 입력 후 '확인 및 적용' 버튼을 누르세요.
+2. 마이크 직접 녹음 버튼을 눌러 음성을 녹음하세요.
+3. 오른쪽 영역에서 인식된 발화와 단어별 실제 Latency를 확인하세요.
+""")
+
+if st.session_state.last_error_msg:
+    st.error(st.session_state.last_error_msg)
+
+# ---------------------------
+# 일별 학습 지문 동적 로직 설정 및 기본 어원 풀이 사전
+# ---------------------------
+DAILY_SENTENCES = [
+    "We need to accelerate our business strategy to expand market share.",
+    "Innovation and digital transformation are key drivers for sustainable growth.",
+    "Effective communication ensures seamless collaboration across cross-functional teams.",
+    "Data-driven decision making minimizes risks and optimizes operational efficiency.",
+    "Customer feedback provides invaluable insights for continuous product improvement."
+]
+
+WORD_ETYMOLOGY_DICT = {
+    "accelerate": ("v.", "ac- (to) + celer (swift)", "가속하다"),
+    "business": ("n.", "busy + ness (상태/일)", "사업, 업무"),
+    "strategy": ("n.", "stratos (multitude) + agein (to lead)", "전략"),
+    "market": ("n.", "mercatus (trade/marketplace)", "시장"),
+    "share": ("n.", "scieran (to divide/cut)", "몫, 점유율"),
+    "innovation": ("n.", "in- (into) + novus (new)", "혁신"),
+    "transformation": ("n.", "trans- (across) + formare (to form)", "전환, 변혁"),
+    "drivers": ("n.", "drive (몰아가다) + -er (사람/요소)", "동력, 추진 요인"),
+    "growth": ("n.", "growan (자라다, 번영하다)", "성장"),
+    "communication": ("n.", "communicare (to share/make common)", "소통, 의사소통"),
+    "collaboration": ("n.", "com- (together) + laborare (to work)", "협업"),
+    "teams": ("n.", "teon (끈으로 묶다)", "팀, 협력팀"),
+    "data": ("n.", "datum (주어진 것, 사실)", "데이터, 자료"),
+    "decision": ("n.", "de- (down) + caedere (to cut)", "결정, 결단"),
+    "risks": ("n.", "risicum (가파른 암초/위험)", "위험, 리스크"),
+    "efficiency": ("n.", "ex- (out) + facere (to make/do)", "효율성"),
+    "customer": ("n.", "custos (guard/guardian -> 단골손님)", "고객"),
+    "feedback": ("n.", "feed (nourish) + back (return)", "피드백, 의견"),
+    "insights": ("n.", "in- (into) + sight (vision)", "통찰력"),
+    "improvement": ("n.", "in- (into) + probare (to prove/make good)", "개선, 향상")
+}
+
+today_str = datetime.date.today().strftime("%Y-%m-%d")
+day_index = abs(hash(today_str)) % len(DAILY_SENTENCES)
+target_sentence = DAILY_SENTENCES[day_index]
+
+col_rec, col_scaff = st.columns([1, 1])
+
+with col_rec:
+    st.markdown(f"**🎯 오늘의 학습 지문 ({today_str}):**")
+    st.markdown(f"> \"{target_sentence}\"")
+    
+    st.subheader("1. 마이크 실시간 녹음")
+    
+    audio_file = st.audio_input("마이크 직접 녹음기")
+
+    if audio_file is not None:
+        raw_bytes = audio_file.read()
+        if st.session_state.get("last_raw_bytes") != raw_bytes:
+            st.session_state.last_raw_bytes = raw_bytes
+            wav_bytes = _ensure_wav_bytes(raw_bytes)
+            if wav_bytes is not None:
+                st.session_state.recorded_audio_bytes = wav_bytes
+                with st.spinner("OpenAI Whisper STT 및 음성 분석 진행 중..."):
+                    active_key = api_key_input.strip() or st.session_state.get("openai_api_key")
+                    analysis_res = analyze_audio_with_whisper(wav_bytes, api_key=active_key)
+                    st.session_state.analysis_data = analysis_res
+                    st.session_state.user_transcript = analysis_res.get("transcript", "")
+                st.session_state.last_error_msg = None
+            else:
+                st.session_state.last_error_msg = "오디오 포맷 변환 실패: WAV로 변환하지 못했습니다."
+
+    st.write("---")
+    
+    st.subheader("🎙️ 테스트용 사운드")
+    
+    if st.button("🔊 테스트용 AI 음성 및 분석 생성", use_container_width=True):
+        sr = 16000
+        duration = 1.0
+        t = np.linspace(0, duration, int(sr * duration), endpoint=False)
+        audio_data = (32767 * 0.5 * np.sin(2 * np.pi * 440 * t)).astype(np.int16)
+        
+        wav_io = BytesIO()
+        with wave.open(wav_io, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sr)
+            wf.writeframes(audio_data.tobytes())
+        
+        st.session_state.recorded_audio_bytes = wav_io.getvalue()
+        st.session_state.analysis_data = {
+            "duration_sec": 1.0,
+            "total_rms": 0.0523,
+            "zcr": 0.0812,
+            "snr_db": 18.5,
+            "latency_ms": 120.0,
+            "avg_pitch_hz": 440.0,
+            "sample_rate": sr,
+            "num_samples": len(audio_data),
+            "voicing_frames": [1, 1, 1, 1],
+            "transcript": "We need to accelerate business strategy.",
+            "word_latencies": [("we", 0.2), ("need", 0.4), ("to", 0.1), ("accelerate", 2.6), ("business", 0.3)]
+        }
+        st.session_state.user_transcript = "We need to accelerate business strategy."
+        st.toast("테스트용 사운드와 분석 데이터가 생성되었습니다!")
         _safe_rerun()
 
-# 메인 UI
-col_rec, col_res = st.columns(2)
-with col_rec:
-    audio_file = st.audio_input("마이크 녹음")
-    if audio_file:
-        wav = _ensure_wav_bytes(audio_file.read())
-        if wav:
-            st.session_state.recorded_audio_bytes = wav
-            st.session_state.analysis_data = analyze_audio_with_whisper(wav, st.session_state.openai_api_key)
+    st.write("---")
 
-with col_res:
-    if st.session_state.analysis_data:
+    if st.button("🔄 녹음 데이터 초기화", use_container_width=True):
+        st.session_state.recorded_audio_bytes = None
+        st.session_state.analysis_data = None
+        st.session_state.last_error_msg = None
+        st.session_state.user_transcript = ""
+        st.toast("녹음 데이터와 분석 결과가 초기화되었습니다.")
+        _safe_rerun()
+
+with col_scaff:
+    st.subheader("2. AI 자동 역번역 비계 (Scaffolding)")
+
+    if st.session_state.analysis_data and "error" not in st.session_state.analysis_data:
         res = st.session_state.analysis_data
-        st.write("### 결과")
-        st.info(res.get("transcript", ""))
+        st.markdown("##### 📊 음성 데이터 분석 결과")
         
-        # Latency 표시
-        latencies = res.get("word_latencies", [])
-        for word, gap in latencies:
-            st.write(f"{word}: {gap}초")
+        duration_val = res.get('duration_sec', 0.0)
+        user_transcript = st.session_state.user_transcript
+        
+        words = [w for w in user_transcript.split() if w.strip()]
+        num_words = len(words)
+        num_chars = len(user_transcript.replace(" ", ""))
+        
+        if duration_val > 0:
+            wpm = int((num_words / duration_val) * 60)
+            cpm = int((num_chars / duration_val) * 60)
+        else:
+            wpm = 0
+            cpm = 0
+
+        accuracy, correct_cnt, wrong_cnt, wrong_words = calculate_word_accuracy_details(target_sentence, user_transcript)
+
+        m1, m2, m3 = st.columns(3)
+        m1.metric("⏱️ 녹음 시간", f"{duration_val:.1f} 초")
+        m2.metric("속도 (WPM / CPM)", f"{wpm} / {cpm}")
+        m3.metric("🎯 대본 일치율", f"{accuracy}%")
+
+        st.write("---")
+        
+        if st.session_state.recorded_audio_bytes:
+            st.markdown("🔊 **내 녹음 듣기:**")
+            st.audio(st.session_state.recorded_audio_bytes, format="audio/wav")
+
+        edited_transcript = st.text_input("🗣️ 인식된 사용자 발화 (STT 결과):", value=user_transcript)
+        if edited_transcript != user_transcript:
+            st.session_state.user_transcript = edited_transcript
+
+        accuracy, correct_cnt, wrong_cnt, wrong_words = calculate_word_accuracy_details(target_sentence, st.session_state.user_transcript)
+        
+        st.markdown(f"❌ **틀린 단어 수:** {wrong_cnt}개 (정확한 단어: {correct_cnt}개 / 전체: {len(target_sentence.split())}개)")
+        
+        word_latencies = res.get("word_latencies", [])
+        
+        if word_latencies or wrong_words:
+            st.markdown("🔍 **단어별 실제 Latency 및 발화 분석:**")
+            display_items = word_latencies if word_latencies else [(w, 0.5) for w in wrong_words]
+            cols = st.columns(min(len(display_items), 4)) if len(display_items) > 0 else [st]
+            
+            wrong_words_lower = {w.lower().strip(".,?!") for w in wrong_words}
+            
+            for idx, item in enumerate(display_items):
+                if isinstance(item, tuple):
+                    w, latency_gap = item
+                else:
+                    w, latency_gap = item, 0.5
+                
+                col_target = cols[idx % len(cols)]
+                w_clean = w.lower().strip(".,?!")
+                
+                with col_target:
+                    if w_clean in wrong_words_lower:
+                        st.error(f"[{w.upper()}]\n\n⏱️ Latency: **{latency_gap}초**")
+                    elif latency_gap > 2.5:
+                        st.info(f"**[{w.upper()}]**\n\n⏱️ Latency: **{latency_gap}초**")
+                    else:
+                        st.success(f"[{w.upper()}]\n\n⏱️ Latency: **{latency_gap}초**")
+        else:
+            st.markdown("✨ **모든 단어를 정확하게 발음하셨습니다!**")
+
+        if accuracy <= 75.0:
+            st.warning("⚠️ **발화 일치율이 75% 이하입니다.** 어원 비계 힌트를 참고하세요!")
+            
+            if wrong_words:
+                tokens = word_tokenize(target_sentence)
+                tagged_tokens = dict(pos_tag(tokens))
+                
+                has_substantive = False
+                for ww in wrong_words:
+                    ww_lower = ww.lower()
+                    pos_tag_val = ""
+                    for orig_w, t_val in tagged_tokens.items():
+                        if orig_w.strip(".,?!").lower() == ww_lower:
+                            pos_tag_val = t_val
+                            break
+                    
+                    if (pos_tag_val.startswith('IN') or 
+                        pos_tag_val.startswith('PRP') or 
+                        pos_tag_val.startswith('CC') or 
+                        (pos_tag_val.startswith('VB') and ww_lower in ['be', 'am', 'is', 'are', 'was', 'were', 'been', 'being'])):
+                        continue 
+                        
+                    if ww_lower in WORD_ETYMOLOGY_DICT:
+                        has_substantive = True
+                        pos, etym, meaning = WORD_ETYMOLOGY_DICT[ww_lower]
+                        st.markdown(f"* **{ww.capitalize()}** ({pos}) [어원: *{etym}*] → *{meaning}*")
+                
+                if not has_substantive:
+                    st.markdown("* 이번에 누락된 단어들은 전치사, 인칭대명사, be동사, 접속사 등의 기초 기능어입니다. 핵심 단어 위주로 다시 발음해 보세요!")
+            else:
+                st.markdown("* 지문 전체의 핵심 단어들을 다시 한번 점검해 보세요.")
+        else:
+            st.success("🎉 **발화 일치율 75% 초과!** 완벽합니다.")
+    elif st.session_state.analysis_data and "error" in st.session_state.analysis_data:
+        st.error(st.session_state.analysis_data["error"])
     else:
-        st.info("녹음을 시작하거나 API 키를 설정하세요.")
+        st.info("👈 좌측에서 마이크로 음성을 녹음하거나 '테스트용 AI 음성 및 분석 생성' 버튼을 눌러보세요.")
