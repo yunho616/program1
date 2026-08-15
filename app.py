@@ -303,7 +303,6 @@ def analyze_audio_with_whisper(wav_bytes: bytes, api_key: Optional[str] = None) 
     else:
         avg_pitch = estimate_pitch_autocorr(samples, sr)
 
-    # 기본 리턴 구조체
     result_data = {
         "duration_sec": round(duration_sec, 1),
         "total_rms": round(total_rms, 6),
@@ -315,13 +314,11 @@ def analyze_audio_with_whisper(wav_bytes: bytes, api_key: Optional[str] = None) 
         "num_samples": samples.size,
         "voicing_frames": voicing.tolist(),
         "transcript": "",
-        "word_latencies": [] # [("word", gap_sec), ...]
+        "word_latencies": [] 
     }
 
-    # API Key 확인 (Streamlit secrets 또는 전달받은 키)
     resolved_key = api_key or os.environ.get("OPENAI_API_KEY")
     if not _have_openai or not resolved_key:
-        # API Key가 없거나 라이브러리가 없으면 기본 음향 분석 결과만 반환하고 STT는 패스
         result_data["transcript"] = "OpenAI API Key가 설정되지 않아 STT 분석을 수행할 수 없습니다."
         return result_data
 
@@ -331,7 +328,6 @@ def analyze_audio_with_whisper(wav_bytes: bytes, api_key: Optional[str] = None) 
         audio_file = BytesIO(wav_bytes)
         audio_file.name = "audio.wav"
 
-        # Whisper API 호출 (단어 단위 타임스탬프 요청)
         transcript_obj = client.audio.transcriptions.create(
             model="whisper-1",
             file=audio_file,
@@ -342,7 +338,6 @@ def analyze_audio_with_whisper(wav_bytes: bytes, api_key: Optional[str] = None) 
         transcript_text = getattr(transcript_obj, "text", "")
         result_data["transcript"] = transcript_text
 
-        # 단어별 타임스탬프 추출 및 간격(Latency) 계산
         words_info = getattr(transcript_obj, "words", [])
         word_latencies = []
         
@@ -352,7 +347,6 @@ def analyze_audio_with_whisper(wav_bytes: bytes, api_key: Optional[str] = None) 
             w_start = w_item.get("start", 0.0)
             
             if i == 0:
-                # 첫 번째 단어의 시작까지 걸린 시간
                 gap = round(w_start, 1)
             else:
                 prev_end = words_info[i-1].get("end", 0.0)
@@ -451,7 +445,6 @@ with col_rec:
             wav_bytes = _ensure_wav_bytes(raw_bytes)
             if wav_bytes is not None:
                 st.session_state.recorded_audio_bytes = wav_bytes
-                # Whisper API를 이용한 정밀 분석 실행
                 with st.spinner("OpenAI Whisper STT 및 음성 분석 진행 중..."):
                     analysis_res = analyze_audio_with_whisper(wav_bytes, api_key=openai_api_key_input)
                     st.session_state.analysis_data = analysis_res
@@ -547,13 +540,15 @@ with col_scaff:
         
         st.markdown(f"❌ **틀린 단어 수:** {wrong_cnt}개 (정확한 단어: {correct_cnt}개 / 전체: {len(target_sentence.split())}개)")
         
-        # 실제 Whisper API에서 받아온 단어별 Latency 내역 반영
         word_latencies = res.get("word_latencies", [])
         
-        if wrong_words or word_latencies:
+        if word_latencies or wrong_words:
             st.markdown("🔍 **단어별 실제 Latency 및 발화 분석:**")
             display_items = word_latencies if word_latencies else [(w, 0.5) for w in wrong_words]
             cols = st.columns(min(len(display_items), 4)) if len(display_items) > 0 else [st]
+            
+            # 틀린 단어 목록 검사 (소문자 기준)
+            wrong_words_lower = {w.lower().strip(".,?!") for w in wrong_words}
             
             for idx, item in enumerate(display_items):
                 if isinstance(item, tuple):
@@ -562,9 +557,16 @@ with col_scaff:
                     w, latency_gap = item, 0.5
                 
                 col_target = cols[idx % len(cols)]
+                w_clean = w.lower().strip(".,?!")
+                
                 with col_target:
-                    if latency_gap > 2.5:
-                        st.info(f"🔵 **[{w.upper()}]**\n\n⏱️ Latency: **{latency_gap}초** (초과)")
+                    # 1순위: 발음이 틀리거나 누락된 단어는 빨간색 (st.error)
+                    if w_clean in wrong_words_lower:
+                        st.error(f"❌ [{w.upper()}]\n\n⏱️ Latency: **{latency_gap}초** (발음 오류/누락)")
+                    # 2순위: 발음은 맞았으나 Latency가 2.5초를 초과한 경우 파란색 (st.info)
+                    elif latency_gap > 2.5:
+                        st.info(f"🔵 **[{w.upper()}]**\n\n⏱️ Latency: **{latency_gap}초** (지연 초과)")
+                    # 3순위: 정상 발음 및 정상 Latency는 초록색 (st.success)
                     else:
                         st.success(f"✅ [{w.upper()}]\n\n⏱️ Latency: **{latency_gap}초**")
         else:
