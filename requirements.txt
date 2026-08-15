@@ -1,6 +1,7 @@
-streamlit>=1.40.0
+streamlit
 numpy
+librosa
 pydub
 imageio-ffmpeg
-librosa
 webrtcvad
+nltk
