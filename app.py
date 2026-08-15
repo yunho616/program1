@@ -317,9 +317,10 @@ def analyze_audio_with_whisper(wav_bytes: bytes, api_key: Optional[str] = None) 
         "word_latencies": [] 
     }
 
+    # API 키 우선순위: 전달받은 인자 -> 세션 상태 -> 환경 변수
     resolved_key = api_key or st.session_state.get("openai_api_key") or os.environ.get("OPENAI_API_KEY")
     if not _have_openai or not resolved_key:
-        result_data["transcript"] = "OpenAI API Key가 설정되지 않았습니다. 사이드바에 키를 입력하고 '확인' 버튼을 눌러주세요."
+        result_data["transcript"] = "OpenAI API Key가 설정되지 않았습니다. 사이드바에 키를 입력하고 '확인 및 적용' 버튼을 눌러주세요."
         return result_data
 
     try:
@@ -383,12 +384,13 @@ st.caption("AI-Powered Voice Scaffolding & Real-time Acoustic Latency Analyzer (
 
 st.sidebar.subheader("💡 설정 및 학습 가이드")
 
-# 사이드바 API Key 입력 및 확인 버튼 구현
+# 사이드바 API Key 입력 및 버튼 로직 강화
 api_key_input = st.sidebar.text_input("OpenAI API Key", type="password", value=st.session_state.openai_api_key)
 if st.sidebar.button("API Key 확인 및 적용"):
     if api_key_input.strip():
         st.session_state.openai_api_key = api_key_input.strip()
         st.sidebar.success("API Key가 정상적으로 적용되었습니다!")
+        _safe_rerun()
     else:
         st.sidebar.error("API Key를 입력해주세요.")
 
@@ -457,7 +459,9 @@ with col_rec:
             if wav_bytes is not None:
                 st.session_state.recorded_audio_bytes = wav_bytes
                 with st.spinner("OpenAI Whisper STT 및 음성 분석 진행 중..."):
-                    analysis_res = analyze_audio_with_whisper(wav_bytes, api_key=st.session_state.openai_api_key)
+                    # 현재 세션에 저장된 키를 명시적으로 전달
+                    active_key = st.session_state.get("openai_api_key")
+                    analysis_res = analyze_audio_with_whisper(wav_bytes, api_key=active_key)
                     st.session_state.analysis_data = analysis_res
                     st.session_state.user_transcript = analysis_res.get("transcript", "")
                 st.session_state.last_error_msg = None
