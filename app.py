@@ -13,7 +13,7 @@ from typing import List, Optional, Tuple, Dict
 import numpy as np
 import streamlit as st
 
-# --- NLTK 라이브러리 및 품사 판별 설정 (최신 punkt_tab 대응) ---
+# --- NLTK 라이브러리 및 최신 품사 판별 리소스 설정 ---
 import nltk
 try:
     nltk.data.find('tokenizers/punkt')
@@ -29,6 +29,11 @@ try:
     nltk.data.find('taggers/averaged_perceptron_tagger')
 except LookupError:
     nltk.download('averaged_perceptron_tagger', quiet=True)
+
+try:
+    nltk.data.find('taggers/averaged_perceptron_tagger_eng')
+except LookupError:
+    nltk.download('averaged_perceptron_tagger_eng', quiet=True)
 
 from nltk.tokenize import word_tokenize
 from nltk.tag import pos_tag
