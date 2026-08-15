@@ -475,8 +475,6 @@ with col_scaff:
         
         st.markdown(f"❌ **틀린 단어 수:** {wrong_cnt}개 (정확한 단어: {correct_cnt}개 / 전체: {len(target_sentence.split())}개)")
         
-        voicing_frames = res.get("voicing_frames", [])
-        
         if wrong_words:
             st.markdown("🔍 **틀린/누락된 단어별 틀 및 Latency 분석:**")
             cols = st.columns(min(len(wrong_words), 4)) if len(wrong_words) > 0 else [st]
@@ -494,23 +492,6 @@ with col_scaff:
         else:
             st.markdown("✨ **모든 단어를 정확하게 발음하셨습니다!**")
 
-        delayed_words = []
-        if words and len(voicing_frames) > 0:
-            for i, word in enumerate(words):
-                estimated_gap = (duration_val / max(1, len(words))) * 1.5 if i > 0 else 0.5
-                if duration_val >= 4.0 and i == 2:
-                    estimated_gap = 2.8
-                
-                if estimated_gap > 2.5:
-                    delayed_words.append((word, round(estimated_gap, 1)))
-
-        if delayed_words:
-            st.warning("⚠️ **단어 간 Latency가 2.5초를 초과한 전체 구간:**")
-            for w, g_time in delayed_words:
-                st.markdown(f"- **\"{w}\"** 단어 전후 지연 시간: **{g_time}초**")
-        else:
-            st.caption("✨ 모든 단어가 원활한 속도와 간격으로 발화되었습니다 (Latency 2.5초 초과 없음).")
-
         if accuracy <= 75.0:
             st.warning("⚠️ **발화 일치율이 75% 이하입니다.** 어원 비계 힌트를 참고하세요!")
             
@@ -527,11 +508,6 @@ with col_scaff:
                             pos_tag_val = t_val
                             break
                     
-                    # 1) 전치사(IN)
-                    # 2) 인칭 주어/대명사(PRP)
-                    # 3) be동사 및 조동사 관련 태그 (VB, VBP, VBZ, VBD 등에서 be동사 형태이거나 보조 기능)
-                    # 4) 접속사(CC)
-                    # 위 항목들에 해당하면 비계 제공 제외(continue)
                     if (pos_tag_val.startswith('IN') or 
                         pos_tag_val.startswith('PRP') or 
                         pos_tag_val.startswith('CC') or 
