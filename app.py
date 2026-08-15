@@ -13,12 +13,17 @@ from typing import List, Optional, Tuple, Dict
 import numpy as np
 import streamlit as st
 
-# --- NLTK 라이브러리 및 품사 판별 설정 ---
+# --- NLTK 라이브러리 및 품사 판별 설정 (최신 punkt_tab 대응) ---
 import nltk
 try:
     nltk.data.find('tokenizers/punkt')
 except LookupError:
     nltk.download('punkt', quiet=True)
+
+try:
+    nltk.data.find('tokenizers/punkt_tab')
+except LookupError:
+    nltk.download('punkt_tab', quiet=True)
 
 try:
     nltk.data.find('taggers/averaged_perceptron_tagger')
@@ -505,24 +510,20 @@ with col_scaff:
             st.warning("⚠️ **발화 일치율이 75% 이하입니다.** 어원 비계 힌트를 참고하세요!")
             
             if wrong_words:
-                # NLTK를 활용해 틀린 단어들의 품사를 실시간 판별 후 명사/핵심어만 필터링
                 tokens = word_tokenize(target_sentence)
                 tagged_tokens = dict(pos_tag(tokens))
                 
                 has_substantive = False
                 for ww in wrong_words:
                     ww_lower = ww.lower()
-                    # NLTK 품사 태그 확인 (NN: 명사, VB: 동사, JJ: 형용사 계열)
-                    # 대소문자 매칭을 위해 원본 문장에서 해당 단어의 태그 찾기
                     pos_tag_val = ""
                     for orig_w, t_val in tagged_tokens.items():
                         if orig_w.strip(".,?!").lower() == ww_lower:
                             pos_tag_val = t_val
                             break
                     
-                    # 접속사(CC), 전치사(IN), 관사(DT) 등 기초 기능어 제외 필터링 조건
                     if pos_tag_val.startswith('IN') or pos_tag_val.startswith('CC') or pos_tag_val.startswith('DT') or pos_tag_val.startswith('PRP'):
-                        continue # 기초 기능어는 스킵
+                        continue 
                         
                     if ww_lower in WORD_ETYMOLOGY_DICT:
                         has_substantive = True
