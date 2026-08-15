@@ -547,7 +547,6 @@ with col_scaff:
             display_items = word_latencies if word_latencies else [(w, 0.5) for w in wrong_words]
             cols = st.columns(min(len(display_items), 4)) if len(display_items) > 0 else [st]
             
-            # 틀린 단어 목록 검사 (소문자 기준)
             wrong_words_lower = {w.lower().strip(".,?!") for w in wrong_words}
             
             for idx, item in enumerate(display_items):
@@ -560,15 +559,15 @@ with col_scaff:
                 w_clean = w.lower().strip(".,?!")
                 
                 with col_target:
-                    # 1순위: 발음이 틀리거나 누락된 단어는 빨간색 (st.error)
+                    # 1순위: 발음이 틀리거나 누락된 단어는 빨간색 (st.error) - 부가 텍스트 제거
                     if w_clean in wrong_words_lower:
-                        st.error(f"❌ [{w.upper()}]\n\n⏱️ Latency: **{latency_gap}초** (발음 오류/누락)")
-                    # 2순위: 발음은 맞았으나 Latency가 2.5초를 초과한 경우 파란색 (st.info)
+                        st.error(f"[{w.upper()}]\n\n⏱️ Latency: **{latency_gap}초**")
+                    # 2순위: Latency가 2.5초를 초과한 경우 파란색 (st.info) - 부가 텍스트 제거
                     elif latency_gap > 2.5:
-                        st.info(f"🔵 **[{w.upper()}]**\n\n⏱️ Latency: **{latency_gap}초** (지연 초과)")
+                        st.info(f"**[{w.upper()}]**\n\n⏱️ Latency: **{latency_gap}초**")
                     # 3순위: 정상 발음 및 정상 Latency는 초록색 (st.success)
                     else:
-                        st.success(f"✅ [{w.upper()}]\n\n⏱️ Latency: **{latency_gap}초**")
+                        st.success(f"[{w.upper()}]\n\n⏱️ Latency: **{latency_gap}초**")
         else:
             st.markdown("✨ **모든 단어를 정확하게 발음하셨습니다!**")
 
