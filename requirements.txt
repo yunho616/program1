@@ -3,6 +3,5 @@ numpy
 librosa
 pydub
 imageio-ffmpeg
-webrtcvad
 nltk
 openai
