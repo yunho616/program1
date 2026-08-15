@@ -309,7 +309,7 @@ if st.session_state.last_error_msg:
     st.error(st.session_state.last_error_msg)
 
 # ---------------------------
-# 일별 학습 지문 동적 로직 설정
+# 일별 학습 지문 동적 로직 설정 및 어원 사전 정의
 # ---------------------------
 DAILY_SENTENCES = [
     "We need to accelerate our business strategy to expand market share.",
@@ -318,6 +318,24 @@ DAILY_SENTENCES = [
     "Data-driven decision making minimizes risks and optimizes operational efficiency.",
     "Customer feedback provides invaluable insights for continuous product improvement."
 ]
+
+# 단어별 어원/언어 비계 사전 (사전에 정의되지 않은 단어는 기본 힌트 제공)
+WORD_ETYMOLOGY_DICT = {
+    "accelerate": ("v.", "ac- (to) + celer (swift)", "가속하다"),
+    "strategy": ("n.", "stratos (multitude) + agein (to lead)", "전략"),
+    "expand": ("v.", "ex- (out) + pandere (to spread)", "확장하다"),
+    "market": ("n.", "mercatus (trade/marketplace)", "시장"),
+    "share": ("n.", "scieran (to divide/cut)", "몫, 점유율"),
+    "innovation": ("n.", "in- (into) + novus (new)", "혁신"),
+    "transformation": ("n.", "trans- (across) + formare (to form)", "전환, 변혁"),
+    "sustainable": ("adj.", "sub- (from below) + tenere (to hold)", "지속 가능한"),
+    "communication": ("n.", "communicare (to share/make common)", "소통, 의사소통"),
+    "collaboration": ("n.", "com- (together) + laborare (to work)", "협업"),
+    "efficiency": ("n.", "ex- (out) + facere (to make/do)", "효율성"),
+    "optimization": ("n.", "optimus (best)", "최적화"),
+    "feedback": ("n.", "feed (nourish) + back (return)", "피드백, 의견"),
+    "insights": ("n.", "in- (into) + sight (vision)", "통찰력")
+}
 
 today_str = datetime.date.today().strftime("%Y-%m-%d")
 day_index = abs(hash(today_str)) % len(DAILY_SENTENCES)
@@ -421,7 +439,7 @@ with col_scaff:
 
         st.write("---")
         
-        # 🔊 사용자가 녹음한 오디오 재생 플레이어
+        # 🔊 사용자가 녹음한 오디오 재생 플레이er
         if st.session_state.recorded_audio_bytes:
             st.markdown("🔊 **내 녹음 듣기:**")
             st.audio(st.session_state.recorded_audio_bytes, format="audio/wav")
@@ -447,7 +465,6 @@ with col_scaff:
                     if simulated_gap > 3.5:
                         simulated_gap = 2.8
                     
-                    # Latency가 2.5초를 초과하는 경우 파란색(st.info) 박스와 스타일 적용
                     if simulated_gap > 2.5:
                         st.info(f"🔵 **[{w.upper()}]**\n\n⏱️ Latency: **{simulated_gap}초** (초과)")
                     else:
@@ -476,11 +493,18 @@ with col_scaff:
 
         if accuracy <= 75.0:
             st.warning("⚠️ **발화 일치율이 75% 이하입니다.** 어원 비계 힌트를 참고하세요!")
-            st.markdown("""
-            * **Accelerate** (v.) [어원: *ac-* + *celer*] → *가속하다*
-            * **Strategy** (n.) [어원: *stratos* + *agein*] → *전략*
-            * **Expand** (v.) [어원: *ex-* + *pandere*] → *확장하다*
-            """)
+            
+            # 틀린/누락된 단어별 동적 어원 비계 표시
+            if wrong_words:
+                for ww in wrong_words:
+                    ww_lower = ww.lower()
+                    if ww_lower in WORD_ETYMOLOGY_DICT:
+                        pos, etym, meaning = WORD_ETYMOLOGY_DICT[ww_lower]
+                        st.markdown(f"* **{ww.capitalize()}** ({pos}) [어원: *{etym}*] → *{meaning}*")
+                    else:
+                        st.markdown(f"* **{ww.capitalize()}** (단어 힌트) → *학습 지문 필수 단어*")
+            else:
+                st.markdown("* 지문 전체의 핵심 단어들을 다시 한번 점검해 보세요.")
         else:
             st.success("🎉 **발화 일치율 75% 초과!** 완벽합니다.")
     elif st.session_state.analysis_data and "error" in st.session_state.analysis_data:
