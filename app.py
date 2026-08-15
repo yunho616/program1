@@ -319,7 +319,6 @@ DAILY_SENTENCES = [
     "Customer feedback provides invaluable insights for continuous product improvement."
 ]
 
-# 오늘 날짜 기반으로 순환 선택 (하루마다 지문이 자동으로 변경됨)
 today_str = datetime.date.today().strftime("%Y-%m-%d")
 day_index = abs(hash(today_str)) % len(DAILY_SENTENCES)
 target_sentence = DAILY_SENTENCES[day_index]
@@ -435,7 +434,7 @@ with col_scaff:
         
         st.markdown(f"❌ **틀린 단어 수:** {wrong_cnt}개 (정확한 단어: {correct_cnt}개 / 전체: {len(target_sentence.split())}개)")
         
-        # 각 틀린 단어별 Latency 시뮬레이션 계산
+        # 각 틀린 단어별 Latency 시뮬레이션 계산 및 2.5초 초과 시 파란색 강조 표시
         voicing_frames = res.get("voicing_frames", [])
         
         if wrong_words:
@@ -444,12 +443,15 @@ with col_scaff:
             for idx, w in enumerate(wrong_words):
                 col_target = cols[idx % len(cols)]
                 with col_target:
-                    simulated_gap = round(0.4 + (idx * 0.7) + (duration_val * 0.1), 1)
+                    simulated_gap = round(0.4 + (idx * 0.9) + (duration_val * 0.1), 1)
                     if simulated_gap > 3.5:
-                        simulated_gap = 2.9
+                        simulated_gap = 2.8
                     
-                    st.error(f"❌ [{w.upper()}]")
-                    st.caption(f"⏱️ Latency: **{simulated_gap}초**")
+                    # Latency가 2.5초를 초과하는 경우 파란색(st.info) 박스와 스타일 적용
+                    if simulated_gap > 2.5:
+                        st.info(f"🔵 **[{w.upper()}]**\n\n⏱️ Latency: **{simulated_gap}초** (초과)")
+                    else:
+                        st.error(f"❌ [{w.upper()}]\n\n⏱️ Latency: **{simulated_gap}초**")
         else:
             st.markdown("✨ **모든 단어를 정확하게 발음하셨습니다!**")
 
