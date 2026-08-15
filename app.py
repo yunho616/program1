@@ -3,6 +3,7 @@ import datetime
 import difflib
 import io
 import math
+import os
 import shutil
 import struct
 import subprocess
@@ -37,6 +38,13 @@ except LookupError:
 
 from nltk.tokenize import word_tokenize
 from nltk.tag import pos_tag
+
+# OpenAI 라이브러리 임포트 (Whisper API 연동용)
+try:
+    import openai
+    _have_openai = True
+except ImportError:
+    _have_openai = False
 
 # Optional libs detection
 _have_pydub = False
@@ -266,11 +274,11 @@ def calculate_word_accuracy_details(target_text: str, user_text: str) -> Tuple[f
     return accuracy, correct_count, wrong_count, wrong_words
 
 
-def analyze_audio_bytes(raw_audio_bytes: bytes) -> Dict:
+# ---------------------------
+# 실제 OpenAI Whisper API를 이용한 STT 및 단어별 Latency 분석 함수
+# ---------------------------
+def analyze_audio_with_whisper(wav_bytes: bytes, api_key: Optional[str] = None) -> Dict:
     try:
-        wav_bytes = _ensure_wav_bytes(raw_audio_bytes)
-        if wav_bytes is None:
-            return {"error": "Failed to convert input to WAV."}
         samples, sr = parse_wav_bytes(wav_bytes)
     except Exception as e:
         return {"error": f"WAV parsing failed: {e}"}
@@ -295,7 +303,8 @@ def analyze_audio_bytes(raw_audio_bytes: bytes) -> Dict:
     else:
         avg_pitch = estimate_pitch_autocorr(samples, sr)
 
-    return {
+    # 기본 리턴 구조체
+    result_data = {
         "duration_sec": round(duration_sec, 1),
         "total_rms": round(total_rms, 6),
         "zcr": round(zcr, 6),
@@ -305,7 +314,60 @@ def analyze_audio_bytes(raw_audio_bytes: bytes) -> Dict:
         "sample_rate": sr,
         "num_samples": samples.size,
         "voicing_frames": voicing.tolist(),
+        "transcript": "",
+        "word_latencies": [] # [("word", gap_sec), ...]
     }
+
+    # API Key 확인 (Streamlit secrets 또는 전달받은 키)
+    resolved_key = api_key or os.environ.get("OPENAI_API_KEY")
+    if not _have_openai or not resolved_key:
+        # API Key가 없거나 라이브러리가 없으면 기본 음향 분석 결과만 반환하고 STT는 패스
+        result_data["transcript"] = "OpenAI API Key가 설정되지 않아 STT 분석을 수행할 수 없습니다."
+        return result_data
+
+    try:
+        client = openai.OpenAI(api_key=resolved_key)
+        
+        audio_file = BytesIO(wav_bytes)
+        audio_file.name = "audio.wav"
+
+        # Whisper API 호출 (단어 단위 타임스탬프 요청)
+        transcript_obj = client.audio.transcriptions.create(
+            model="whisper-1",
+            file=audio_file,
+            response_format="verbose_json",
+            timestamp_granularities=["word"]
+        )
+
+        transcript_text = getattr(transcript_obj, "text", "")
+        result_data["transcript"] = transcript_text
+
+        # 단어별 타임스탬프 추출 및 간격(Latency) 계산
+        words_info = getattr(transcript_obj, "words", [])
+        word_latencies = []
+        
+        for i in range(len(words_info)):
+            w_item = words_info[i]
+            w_text = w_item.get("word", "").strip()
+            w_start = w_item.get("start", 0.0)
+            
+            if i == 0:
+                # 첫 번째 단어의 시작까지 걸린 시간
+                gap = round(w_start, 1)
+            else:
+                prev_end = words_info[i-1].get("end", 0.0)
+                gap = round(w_start - prev_end, 1)
+                if gap < 0:
+                    gap = 0.0
+            
+            word_latencies.append((w_text, gap))
+
+        result_data["word_latencies"] = word_latencies
+
+    except Exception as e:
+        result_data["transcript"] = f"STT API 호출 중 오류 발생: {str(e)}"
+
+    return result_data
 
 
 # ---------------------------
@@ -318,16 +380,17 @@ if "analysis_data" not in st.session_state:
 if "last_error_msg" not in st.session_state:
     st.session_state.last_error_msg = None
 if "user_transcript" not in st.session_state:
-    st.session_state.user_transcript = "We need accelerate business strategy to expand."
+    st.session_state.user_transcript = ""
 
 st.title("🛡️ 특허 1호 MVP: 음성 Latency 분석 및 자동 역번역 비계 튜터")
-st.caption("AI-Powered Voice Scaffolding & Real-time Acoustic Latency Analyzer")
+st.caption("AI-Powered Voice Scaffolding & Real-time Acoustic Latency Analyzer (with Whisper STT)")
 
-st.sidebar.subheader("💡 학습 가이드")
+st.sidebar.subheader("💡 설정 및 학습 가이드")
+openai_api_key_input = st.sidebar.text_input("OpenAI API Key", type="password", value=os.environ.get("OPENAI_API_KEY", ""))
 st.sidebar.info("""
-1. 마이크 직접 녹음기 버튼을 눌러 음성을 녹음하세요.
-2. '🎙️ 테스트용 사운드'의 AI 음성 생성 버튼을 누르면 테스트용 오디오와 분석 결과가 제공됩니다.
-3. 오른쪽 영역에서 녹음된 오디오를 듣고 인식된 발화를 확인하세요.
+1. OpenAI API Key를 입력하세요 (실제 단어별 STT 및 Latency 측정에 필요합니다).
+2. 마이크 직접 녹음 버튼을 눌러 음성을 녹음하세요.
+3. 오른쪽 영역에서 인식된 발화와 단어별 실제 Latency를 확인하세요.
 """)
 
 if st.session_state.last_error_msg:
@@ -388,7 +451,11 @@ with col_rec:
             wav_bytes = _ensure_wav_bytes(raw_bytes)
             if wav_bytes is not None:
                 st.session_state.recorded_audio_bytes = wav_bytes
-                st.session_state.analysis_data = analyze_audio_bytes(wav_bytes)
+                # Whisper API를 이용한 정밀 분석 실행
+                with st.spinner("OpenAI Whisper STT 및 음성 분석 진행 중..."):
+                    analysis_res = analyze_audio_with_whisper(wav_bytes, api_key=openai_api_key_input)
+                    st.session_state.analysis_data = analysis_res
+                    st.session_state.user_transcript = analysis_res.get("transcript", "")
                 st.session_state.last_error_msg = None
             else:
                 st.session_state.last_error_msg = "오디오 포맷 변환 실패: WAV로 변환하지 못했습니다."
@@ -420,9 +487,11 @@ with col_rec:
             "avg_pitch_hz": 440.0,
             "sample_rate": sr,
             "num_samples": len(audio_data),
-            "voicing_frames": [1, 1, 1, 1]
+            "voicing_frames": [1, 1, 1, 1],
+            "transcript": "We need to accelerate business strategy.",
+            "word_latencies": [("we", 0.2), ("need", 0.4), ("to", 0.1), ("accelerate", 2.6), ("business", 0.3)]
         }
-        st.session_state.user_transcript = "We need accelerate business strategy to expand."
+        st.session_state.user_transcript = "We need to accelerate business strategy."
         st.toast("테스트용 사운드와 분석 데이터가 생성되었습니다!")
         _safe_rerun()
 
@@ -432,6 +501,7 @@ with col_rec:
         st.session_state.recorded_audio_bytes = None
         st.session_state.analysis_data = None
         st.session_state.last_error_msg = None
+        st.session_state.user_transcript = ""
         st.toast("녹음 데이터와 분석 결과가 초기화되었습니다.")
         _safe_rerun()
 
@@ -443,10 +513,11 @@ with col_scaff:
         st.markdown("##### 📊 음성 데이터 분석 결과")
         
         duration_val = res.get('duration_sec', 0.0)
+        user_transcript = st.session_state.user_transcript
         
-        words = [w for w in st.session_state.user_transcript.split() if w.strip()]
+        words = [w for w in user_transcript.split() if w.strip()]
         num_words = len(words)
-        num_chars = len(st.session_state.user_transcript.replace(" ", ""))
+        num_chars = len(user_transcript.replace(" ", ""))
         
         if duration_val > 0:
             wpm = int((num_words / duration_val) * 60)
@@ -455,7 +526,7 @@ with col_scaff:
             wpm = 0
             cpm = 0
 
-        accuracy, correct_cnt, wrong_cnt, wrong_words = calculate_word_accuracy_details(target_sentence, st.session_state.user_transcript)
+        accuracy, correct_cnt, wrong_cnt, wrong_words = calculate_word_accuracy_details(target_sentence, user_transcript)
 
         m1, m2, m3 = st.columns(3)
         m1.metric("⏱️ 녹음 시간", f"{duration_val:.1f} 초")
@@ -468,27 +539,34 @@ with col_scaff:
             st.markdown("🔊 **내 녹음 듣기:**")
             st.audio(st.session_state.recorded_audio_bytes, format="audio/wav")
 
-        user_transcript = st.text_input("🗣️ 인식된 사용자 발화:", value=st.session_state.user_transcript)
-        st.session_state.user_transcript = user_transcript
+        edited_transcript = st.text_input("🗣️ 인식된 사용자 발화 (STT 결과):", value=user_transcript)
+        if edited_transcript != user_transcript:
+            st.session_state.user_transcript = edited_transcript
 
-        accuracy, correct_cnt, wrong_cnt, wrong_words = calculate_word_accuracy_details(target_sentence, user_transcript)
+        accuracy, correct_cnt, wrong_cnt, wrong_words = calculate_word_accuracy_details(target_sentence, st.session_state.user_transcript)
         
         st.markdown(f"❌ **틀린 단어 수:** {wrong_cnt}개 (정확한 단어: {correct_cnt}개 / 전체: {len(target_sentence.split())}개)")
         
-        if wrong_words:
-            st.markdown("🔍 **틀린/누락된 단어별 틀 및 Latency 분석:**")
-            cols = st.columns(min(len(wrong_words), 4)) if len(wrong_words) > 0 else [st]
-            for idx, w in enumerate(wrong_words):
+        # 실제 Whisper API에서 받아온 단어별 Latency 내역 반영
+        word_latencies = res.get("word_latencies", [])
+        
+        if wrong_words or word_latencies:
+            st.markdown("🔍 **단어별 실제 Latency 및 발화 분석:**")
+            display_items = word_latencies if word_latencies else [(w, 0.5) for w in wrong_words]
+            cols = st.columns(min(len(display_items), 4)) if len(display_items) > 0 else [st]
+            
+            for idx, item in enumerate(display_items):
+                if isinstance(item, tuple):
+                    w, latency_gap = item
+                else:
+                    w, latency_gap = item, 0.5
+                
                 col_target = cols[idx % len(cols)]
                 with col_target:
-                    simulated_gap = round(0.4 + (idx * 0.9) + (duration_val * 0.1), 1)
-                    if simulated_gap > 3.5:
-                        simulated_gap = 2.8
-                    
-                    if simulated_gap > 2.5:
-                        st.info(f"🔵 **[{w.upper()}]**\n\n⏱️ Latency: **{simulated_gap}초** (초과)")
+                    if latency_gap > 2.5:
+                        st.info(f"🔵 **[{w.upper()}]**\n\n⏱️ Latency: **{latency_gap}초** (초과)")
                     else:
-                        st.error(f"❌ [{w.upper()}]\n\n⏱️ Latency: **{simulated_gap}초**")
+                        st.success(f"✅ [{w.upper()}]\n\n⏱️ Latency: **{latency_gap}초**")
         else:
             st.markdown("✨ **모든 단어를 정확하게 발음하셨습니다!**")
 
