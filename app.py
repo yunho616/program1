@@ -317,9 +317,9 @@ def analyze_audio_with_whisper(wav_bytes: bytes, api_key: Optional[str] = None) 
         "word_latencies": [] 
     }
 
-    resolved_key = api_key or os.environ.get("OPENAI_API_KEY")
+    resolved_key = api_key or st.session_state.get("openai_api_key") or os.environ.get("OPENAI_API_KEY")
     if not _have_openai or not resolved_key:
-        result_data["transcript"] = "OpenAI API Key가 설정되지 않아 STT 분석을 수행할 수 없습니다."
+        result_data["transcript"] = "OpenAI API Key가 설정되지 않았습니다. 사이드바에 키를 입력하고 '확인' 버튼을 눌러주세요."
         return result_data
 
     try:
@@ -375,14 +375,25 @@ if "last_error_msg" not in st.session_state:
     st.session_state.last_error_msg = None
 if "user_transcript" not in st.session_state:
     st.session_state.user_transcript = ""
+if "openai_api_key" not in st.session_state:
+    st.session_state.openai_api_key = os.environ.get("OPENAI_API_KEY", "")
 
 st.title("🛡️ 특허 1호 MVP: 음성 Latency 분석 및 자동 역번역 비계 튜터")
 st.caption("AI-Powered Voice Scaffolding & Real-time Acoustic Latency Analyzer (with Whisper STT)")
 
 st.sidebar.subheader("💡 설정 및 학습 가이드")
-openai_api_key_input = st.sidebar.text_input("OpenAI API Key", type="password", value=os.environ.get("OPENAI_API_KEY", ""))
+
+# 사이드바 API Key 입력 및 확인 버튼 구현
+api_key_input = st.sidebar.text_input("OpenAI API Key", type="password", value=st.session_state.openai_api_key)
+if st.sidebar.button("API Key 확인 및 적용"):
+    if api_key_input.strip():
+        st.session_state.openai_api_key = api_key_input.strip()
+        st.sidebar.success("API Key가 정상적으로 적용되었습니다!")
+    else:
+        st.sidebar.error("API Key를 입력해주세요.")
+
 st.sidebar.info("""
-1. OpenAI API Key를 입력하세요 (실제 단어별 STT 및 Latency 측정에 필요합니다).
+1. OpenAI API Key를 입력 후 '확인 및 적용' 버튼을 누르세요.
 2. 마이크 직접 녹음 버튼을 눌러 음성을 녹음하세요.
 3. 오른쪽 영역에서 인식된 발화와 단어별 실제 Latency를 확인하세요.
 """)
@@ -446,7 +457,7 @@ with col_rec:
             if wav_bytes is not None:
                 st.session_state.recorded_audio_bytes = wav_bytes
                 with st.spinner("OpenAI Whisper STT 및 음성 분석 진행 중..."):
-                    analysis_res = analyze_audio_with_whisper(wav_bytes, api_key=openai_api_key_input)
+                    analysis_res = analyze_audio_with_whisper(wav_bytes, api_key=st.session_state.openai_api_key)
                     st.session_state.analysis_data = analysis_res
                     st.session_state.user_transcript = analysis_res.get("transcript", "")
                 st.session_state.last_error_msg = None
@@ -559,13 +570,10 @@ with col_scaff:
                 w_clean = w.lower().strip(".,?!")
                 
                 with col_target:
-                    # 1순위: 발음이 틀리거나 누락된 단어는 빨간색 (st.error) - 부가 텍스트 제거
                     if w_clean in wrong_words_lower:
                         st.error(f"[{w.upper()}]\n\n⏱️ Latency: **{latency_gap}초**")
-                    # 2순위: Latency가 2.5초를 초과한 경우 파란색 (st.info) - 부가 텍스트 제거
                     elif latency_gap > 2.5:
                         st.info(f"**[{w.upper()}]**\n\n⏱️ Latency: **{latency_gap}초**")
-                    # 3순위: 정상 발음 및 정상 Latency는 초록색 (st.success)
                     else:
                         st.success(f"[{w.upper()}]\n\n⏱️ Latency: **{latency_gap}초**")
         else:
