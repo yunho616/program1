@@ -41,7 +41,7 @@ try:
     import webrtcvad  # type: ignore
     _have_webrtcvad = True
 except Exception:
-    webrtcvad = None
+    _iioffmpeg = None
 
 
 # ---------------------------
@@ -309,7 +309,7 @@ if st.session_state.last_error_msg:
     st.error(st.session_state.last_error_msg)
 
 # ---------------------------
-# 일별 학습 지문 동적 로직 설정 및 어원 사전 정의
+# 일별 학습 지문 동적 로직 설정 및 명사 위주의 상세 어원 사전
 # ---------------------------
 DAILY_SENTENCES = [
     "We need to accelerate our business strategy to expand market share.",
@@ -319,22 +319,37 @@ DAILY_SENTENCES = [
     "Customer feedback provides invaluable insights for continuous product improvement."
 ]
 
-# 단어별 어원/언어 비계 사전 (사전에 정의되지 않은 단어는 기본 힌트 제공)
+# 접속사, be동사, 전치사, 대명사 등 초등 기능어 제외 / 명사 및 핵심 단어 중심 어원 사전
 WORD_ETYMOLOGY_DICT = {
+    # 1번 지문 관련 단어
     "accelerate": ("v.", "ac- (to) + celer (swift)", "가속하다"),
+    "business": ("n.", "busy + ness (상태/일)", "사업, 업무"),
     "strategy": ("n.", "stratos (multitude) + agein (to lead)", "전략"),
-    "expand": ("v.", "ex- (out) + pandere (to spread)", "확장하다"),
     "market": ("n.", "mercatus (trade/marketplace)", "시장"),
     "share": ("n.", "scieran (to divide/cut)", "몫, 점유율"),
+    
+    # 2번 지문 관련 단어
     "innovation": ("n.", "in- (into) + novus (new)", "혁신"),
     "transformation": ("n.", "trans- (across) + formare (to form)", "전환, 변혁"),
-    "sustainable": ("adj.", "sub- (from below) + tenere (to hold)", "지속 가능한"),
+    "drivers": ("n.", "drive (몰아가다) + -er (사람/요소)", "동력, 추진 요인"),
+    "growth": ("n.", "growan (자라다, 번영하다)", "성장"),
+    
+    # 3번 지문 관련 단어
     "communication": ("n.", "communicare (to share/make common)", "소통, 의사소통"),
     "collaboration": ("n.", "com- (together) + laborare (to work)", "협업"),
+    "teams": ("n.", "teon (끈으로 묶다)", "팀, 협력팀"),
+    
+    # 4번 지문 관련 단어
+    "data": ("n.", "datum (주어진 것, 사실)", "데이터, 자료"),
+    "decision": ("n.", "de- (down) + caedere (to cut)", "결정, 결단"),
+    "risks": ("n.", "risicum (가파른 암초/위험)", "위험, 리스크"),
     "efficiency": ("n.", "ex- (out) + facere (to make/do)", "효율성"),
-    "optimization": ("n.", "optimus (best)", "최적화"),
+    
+    # 5번 지문 관련 단어
+    "customer": ("n.", "custos (guard/guardian -> 단골손님)", "고객"),
     "feedback": ("n.", "feed (nourish) + back (return)", "피드백, 의견"),
-    "insights": ("n.", "in- (into) + sight (vision)", "통찰력")
+    "insights": ("n.", "in- (into) + sight (vision)", "통찰력"),
+    "improvement": ("n.", "in- (into) + probare (to prove/make good)", "개선, 향상")
 }
 
 today_str = datetime.date.today().strftime("%Y-%m-%d")
@@ -439,7 +454,7 @@ with col_scaff:
 
         st.write("---")
         
-        # 🔊 사용자가 녹음한 오디오 재생 플레이er
+        # 🔊 사용자가 녹음한 오디오 재생 플레이어
         if st.session_state.recorded_audio_bytes:
             st.markdown("🔊 **내 녹음 듣기:**")
             st.audio(st.session_state.recorded_audio_bytes, format="audio/wav")
@@ -494,17 +509,20 @@ with col_scaff:
         if accuracy <= 75.0:
             st.warning("⚠️ **발화 일치율이 75% 이하입니다.** 어원 비계 힌트를 참고하세요!")
             
-            # 틀린/누락된 단어별 동적 어원 비계 표시
+            # 틀린/누락된 명사 및 핵심 단어별 동적 어원 비계 표시 (기능어는 미등록으로 안내 생략 또는 부드럽게 처리)
             if wrong_words:
+                has_hint = False
                 for ww in wrong_words:
                     ww_lower = ww.lower()
                     if ww_lower in WORD_ETYMOLOGY_DICT:
+                        has_hint = True
                         pos, etym, meaning = WORD_ETYMOLOGY_DICT[ww_lower]
                         st.markdown(f"* **{ww.capitalize()}** ({pos}) [어원: *{etym}*] → *{meaning}*")
-                    else:
-                        st.markdown(f"* **{ww.capitalize()}** (단어 힌트) → *학습 지문 필수 단어*")
+                
+                if not has_hint:
+                    st.markdown("* 이번에 누락된 단어들은 주로 관사나 전치사 등의 문법 요소입니다. 핵심 명사 위주로 다시 발음해 보세요!")
             else:
-                st.markdown("* 지문 전체의 핵심 단어들을 다시 한번 점검해 보세요.")
+                st.markdown("* 지문 전체의 핵심 명사들을 다시 한번 점검해 보세요.")
         else:
             st.success("🎉 **발화 일치율 75% 초과!** 완벽합니다.")
     elif st.session_state.analysis_data and "error" in st.session_state.analysis_data:
