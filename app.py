@@ -278,6 +278,9 @@ def calculate_word_accuracy_details(target_text: str, user_text: str) -> Tuple[f
 # 실제 OpenAI Whisper API를 이용한 STT 및 단어별 Latency 분석 함수
 # ---------------------------
 def analyze_audio_with_whisper(wav_bytes: bytes, api_key: Optional[str] = None) -> Dict:
+    # 세션 상태 및 인자에서 API Key를 완벽하게 탐색하도록 수정
+    resolved_key = api_key or st.session_state.get("openai_api_key") or os.environ.get("OPENAI_API_KEY")
+
     try:
         samples, sr = parse_wav_bytes(wav_bytes)
     except Exception as e:
@@ -316,10 +319,6 @@ def analyze_audio_with_whisper(wav_bytes: bytes, api_key: Optional[str] = None) 
         "transcript": "",
         "word_latencies": [] 
     }
-
-    resolved_key = api_key or st.session_state.get("openai_api_key") or os.environ.get("OPENAI_API_KEY")
-    if not resolved_key and "openai_api_key" in st.session_state:
-        resolved_key = st.session_state["openai_api_key"]
 
     if not _have_openai or not resolved_key:
         result_data["transcript"] = "OpenAI API Key가 설정되지 않았습니다. 사이드바에 키를 입력하고 '확인 및 적용' 버튼을 눌러주세요."
