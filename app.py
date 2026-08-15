@@ -317,7 +317,6 @@ def analyze_audio_with_whisper(wav_bytes: bytes, api_key: Optional[str] = None) 
         "word_latencies": [] 
     }
 
-    # API 키 우선순위: 전달받은 인자 -> 세션 상태 -> 환경 변수
     resolved_key = api_key or st.session_state.get("openai_api_key") or os.environ.get("OPENAI_API_KEY")
     if not _have_openai or not resolved_key:
         result_data["transcript"] = "OpenAI API Key가 설정되지 않았습니다. 사이드바에 키를 입력하고 '확인 및 적용' 버튼을 눌러주세요."
@@ -378,21 +377,27 @@ if "user_transcript" not in st.session_state:
     st.session_state.user_transcript = ""
 if "openai_api_key" not in st.session_state:
     st.session_state.openai_api_key = os.environ.get("OPENAI_API_KEY", "")
+if "key_applied" not in st.session_state:
+    st.session_state.key_applied = False
 
 st.title("🛡️ 특허 1호 MVP: 음성 Latency 분석 및 자동 역번역 비계 튜터")
 st.caption("AI-Powered Voice Scaffolding & Real-time Acoustic Latency Analyzer (with Whisper STT)")
 
 st.sidebar.subheader("💡 설정 및 학습 가이드")
 
-# 사이드바 API Key 입력 및 버튼 로직 강화
+# 사이드바 API Key 입력 및 버튼 로직
 api_key_input = st.sidebar.text_input("OpenAI API Key", type="password", value=st.session_state.openai_api_key)
+
 if st.sidebar.button("API Key 확인 및 적용"):
     if api_key_input.strip():
         st.session_state.openai_api_key = api_key_input.strip()
+        st.session_state.key_applied = True
         st.sidebar.success("API Key가 정상적으로 적용되었습니다!")
-        _safe_rerun()
     else:
         st.sidebar.error("API Key를 입력해주세요.")
+
+if st.session_state.key_applied:
+    st.sidebar.info("🔑 API Key가 적용된 상태입니다.")
 
 st.sidebar.info("""
 1. OpenAI API Key를 입력 후 '확인 및 적용' 버튼을 누르세요.
@@ -459,7 +464,6 @@ with col_rec:
             if wav_bytes is not None:
                 st.session_state.recorded_audio_bytes = wav_bytes
                 with st.spinner("OpenAI Whisper STT 및 음성 분석 진행 중..."):
-                    # 현재 세션에 저장된 키를 명시적으로 전달
                     active_key = st.session_state.get("openai_api_key")
                     analysis_res = analyze_audio_with_whisper(wav_bytes, api_key=active_key)
                     st.session_state.analysis_data = analysis_res
