@@ -527,7 +527,15 @@ with col_scaff:
                             pos_tag_val = t_val
                             break
                     
-                    if pos_tag_val.startswith('IN') or pos_tag_val.startswith('CC') or pos_tag_val.startswith('DT') or pos_tag_val.startswith('PRP'):
+                    # 1) 전치사(IN)
+                    # 2) 인칭 주어/대명사(PRP)
+                    # 3) be동사 및 조동사 관련 태그 (VB, VBP, VBZ, VBD 등에서 be동사 형태이거나 보조 기능)
+                    # 4) 접속사(CC)
+                    # 위 항목들에 해당하면 비계 제공 제외(continue)
+                    if (pos_tag_val.startswith('IN') or 
+                        pos_tag_val.startswith('PRP') or 
+                        pos_tag_val.startswith('CC') or 
+                        (pos_tag_val.startswith('VB') and ww_lower in ['be', 'am', 'is', 'are', 'was', 'were', 'been', 'being'])):
                         continue 
                         
                     if ww_lower in WORD_ETYMOLOGY_DICT:
@@ -536,9 +544,9 @@ with col_scaff:
                         st.markdown(f"* **{ww.capitalize()}** ({pos}) [어원: *{etym}*] → *{meaning}*")
                 
                 if not has_substantive:
-                    st.markdown("* 이번에 누락된 단어들은 주로 관사나 전치사 등의 문법 요소입니다. 핵심 명사 위주로 다시 발음해 보세요!")
+                    st.markdown("* 이번에 누락된 단어들은 전치사, 인칭대명사, be동사, 접속사 등의 기초 기능어입니다. 핵심 단어 위주로 다시 발음해 보세요!")
             else:
-                st.markdown("* 지문 전체의 핵심 명사들을 다시 한번 점검해 보세요.")
+                st.markdown("* 지문 전체의 핵심 단어들을 다시 한번 점검해 보세요.")
         else:
             st.success("🎉 **발화 일치율 75% 초과!** 완벽합니다.")
     elif st.session_state.analysis_data and "error" in st.session_state.analysis_data:
