@@ -13,6 +13,21 @@ from typing import List, Optional, Tuple, Dict
 import numpy as np
 import streamlit as st
 
+# --- NLTK 라이브러리 및 품사 판별 설정 ---
+import nltk
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt', quiet=True)
+
+try:
+    nltk.data.find('taggers/averaged_perceptron_tagger')
+except LookupError:
+    nltk.download('averaged_perceptron_tagger', quiet=True)
+
+from nltk.tokenize import word_tokenize
+from nltk.tag import pos_tag
+
 # Optional libs detection
 _have_pydub = False
 _have_imageio_ffmpeg = False
@@ -41,7 +56,7 @@ try:
     import webrtcvad  # type: ignore
     _have_webrtcvad = True
 except Exception:
-    _iioffmpeg = None
+    _have_webrtcvad = False
 
 
 # ---------------------------
@@ -309,7 +324,7 @@ if st.session_state.last_error_msg:
     st.error(st.session_state.last_error_msg)
 
 # ---------------------------
-# 일별 학습 지문 동적 로직 설정 및 명사 위주의 상세 어원 사전
+# 일별 학습 지문 동적 로직 설정 및 기본 어원 풀이 사전
 # ---------------------------
 DAILY_SENTENCES = [
     "We need to accelerate our business strategy to expand market share.",
@@ -319,33 +334,23 @@ DAILY_SENTENCES = [
     "Customer feedback provides invaluable insights for continuous product improvement."
 ]
 
-# 접속사, be동사, 전치사, 대명사 등 초등 기능어 제외 / 명사 및 핵심 단어 중심 어원 사전
 WORD_ETYMOLOGY_DICT = {
-    # 1번 지문 관련 단어
     "accelerate": ("v.", "ac- (to) + celer (swift)", "가속하다"),
     "business": ("n.", "busy + ness (상태/일)", "사업, 업무"),
     "strategy": ("n.", "stratos (multitude) + agein (to lead)", "전략"),
     "market": ("n.", "mercatus (trade/marketplace)", "시장"),
     "share": ("n.", "scieran (to divide/cut)", "몫, 점유율"),
-    
-    # 2번 지문 관련 단어
     "innovation": ("n.", "in- (into) + novus (new)", "혁신"),
     "transformation": ("n.", "trans- (across) + formare (to form)", "전환, 변혁"),
     "drivers": ("n.", "drive (몰아가다) + -er (사람/요소)", "동력, 추진 요인"),
     "growth": ("n.", "growan (자라다, 번영하다)", "성장"),
-    
-    # 3번 지문 관련 단어
     "communication": ("n.", "communicare (to share/make common)", "소통, 의사소통"),
     "collaboration": ("n.", "com- (together) + laborare (to work)", "협업"),
     "teams": ("n.", "teon (끈으로 묶다)", "팀, 협력팀"),
-    
-    # 4번 지문 관련 단어
     "data": ("n.", "datum (주어진 것, 사실)", "데이터, 자료"),
     "decision": ("n.", "de- (down) + caedere (to cut)", "결정, 결단"),
     "risks": ("n.", "risicum (가파른 암초/위험)", "위험, 리스크"),
     "efficiency": ("n.", "ex- (out) + facere (to make/do)", "효율성"),
-    
-    # 5번 지문 관련 단어
     "customer": ("n.", "custos (guard/guardian -> 단골손님)", "고객"),
     "feedback": ("n.", "feed (nourish) + back (return)", "피드백, 의견"),
     "insights": ("n.", "in- (into) + sight (vision)", "통찰력"),
@@ -364,7 +369,6 @@ with col_rec:
     
     st.subheader("1. 마이크 실시간 녹음")
     
-    # 마이크 직접 녹음기 위젯
     audio_file = st.audio_input("마이크 직접 녹음기")
 
     if audio_file is not None:
@@ -381,7 +385,6 @@ with col_rec:
 
     st.write("---")
     
-    # 🎙️ 테스트용 사운드 영역
     st.subheader("🎙️ 테스트용 사운드")
     
     if st.button("🔊 테스트용 AI 음성 및 분석 생성", use_container_width=True):
@@ -431,7 +434,6 @@ with col_scaff:
         
         duration_val = res.get('duration_sec', 0.0)
         
-        # 발화 텍스트 기반 WPM / CPM 계산
         words = [w for w in st.session_state.user_transcript.split() if w.strip()]
         num_words = len(words)
         num_chars = len(st.session_state.user_transcript.replace(" ", ""))
@@ -443,10 +445,8 @@ with col_scaff:
             wpm = 0
             cpm = 0
 
-        # 정밀 단어 분석 및 틀린 단어 목록 추출
         accuracy, correct_cnt, wrong_cnt, wrong_words = calculate_word_accuracy_details(target_sentence, st.session_state.user_transcript)
 
-        # 메인 분석 지표 3개 분할 배치 (녹음 시간 / 속도(WPM/CPM) / 대본 일치율)
         m1, m2, m3 = st.columns(3)
         m1.metric("⏱️ 녹음 시간", f"{duration_val:.1f} 초")
         m2.metric("속도 (WPM / CPM)", f"{wpm} / {cpm}")
@@ -454,7 +454,6 @@ with col_scaff:
 
         st.write("---")
         
-        # 🔊 사용자가 녹음한 오디오 재생 플레이어
         if st.session_state.recorded_audio_bytes:
             st.markdown("🔊 **내 녹음 듣기:**")
             st.audio(st.session_state.recorded_audio_bytes, format="audio/wav")
@@ -462,12 +461,10 @@ with col_scaff:
         user_transcript = st.text_input("🗣️ 인식된 사용자 발화:", value=st.session_state.user_transcript)
         st.session_state.user_transcript = user_transcript
 
-        # 실시간 변경된 텍스트에 맞춰 일치율 및 틀린 단어 목록 재계산 적용
         accuracy, correct_cnt, wrong_cnt, wrong_words = calculate_word_accuracy_details(target_sentence, user_transcript)
         
         st.markdown(f"❌ **틀린 단어 수:** {wrong_cnt}개 (정확한 단어: {correct_cnt}개 / 전체: {len(target_sentence.split())}개)")
         
-        # 각 틀린 단어별 Latency 시뮬레이션 계산 및 2.5초 초과 시 파란색 강조 표시
         voicing_frames = res.get("voicing_frames", [])
         
         if wrong_words:
@@ -487,7 +484,6 @@ with col_scaff:
         else:
             st.markdown("✨ **모든 단어를 정확하게 발음하셨습니다!**")
 
-        # --- 전체 단어 간 Latency 경고 검출 ---
         delayed_words = []
         if words and len(voicing_frames) > 0:
             for i, word in enumerate(words):
@@ -504,22 +500,36 @@ with col_scaff:
                 st.markdown(f"- **\"{w}\"** 단어 전후 지연 시간: **{g_time}초**")
         else:
             st.caption("✨ 모든 단어가 원활한 속도와 간격으로 발화되었습니다 (Latency 2.5초 초과 없음).")
-        # ----------------------------------------------------
 
         if accuracy <= 75.0:
             st.warning("⚠️ **발화 일치율이 75% 이하입니다.** 어원 비계 힌트를 참고하세요!")
             
-            # 틀린/누락된 명사 및 핵심 단어별 동적 어원 비계 표시 (기능어는 미등록으로 안내 생략 또는 부드럽게 처리)
             if wrong_words:
-                has_hint = False
+                # NLTK를 활용해 틀린 단어들의 품사를 실시간 판별 후 명사/핵심어만 필터링
+                tokens = word_tokenize(target_sentence)
+                tagged_tokens = dict(pos_tag(tokens))
+                
+                has_substantive = False
                 for ww in wrong_words:
                     ww_lower = ww.lower()
+                    # NLTK 품사 태그 확인 (NN: 명사, VB: 동사, JJ: 형용사 계열)
+                    # 대소문자 매칭을 위해 원본 문장에서 해당 단어의 태그 찾기
+                    pos_tag_val = ""
+                    for orig_w, t_val in tagged_tokens.items():
+                        if orig_w.strip(".,?!").lower() == ww_lower:
+                            pos_tag_val = t_val
+                            break
+                    
+                    # 접속사(CC), 전치사(IN), 관사(DT) 등 기초 기능어 제외 필터링 조건
+                    if pos_tag_val.startswith('IN') or pos_tag_val.startswith('CC') or pos_tag_val.startswith('DT') or pos_tag_val.startswith('PRP'):
+                        continue # 기초 기능어는 스킵
+                        
                     if ww_lower in WORD_ETYMOLOGY_DICT:
-                        has_hint = True
+                        has_substantive = True
                         pos, etym, meaning = WORD_ETYMOLOGY_DICT[ww_lower]
                         st.markdown(f"* **{ww.capitalize()}** ({pos}) [어원: *{etym}*] → *{meaning}*")
                 
-                if not has_hint:
+                if not has_substantive:
                     st.markdown("* 이번에 누락된 단어들은 주로 관사나 전치사 등의 문법 요소입니다. 핵심 명사 위주로 다시 발음해 보세요!")
             else:
                 st.markdown("* 지문 전체의 핵심 명사들을 다시 한번 점검해 보세요.")
