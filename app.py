@@ -317,7 +317,11 @@ def analyze_audio_with_whisper(wav_bytes: bytes, api_key: Optional[str] = None) 
         "word_latencies": [] 
     }
 
+    # API 키를 강제로 세션과 환경변수에서 명확히 가져오도록 보완
     resolved_key = api_key or st.session_state.get("openai_api_key") or os.environ.get("OPENAI_API_KEY")
+    if not resolved_key and "openai_api_key" in st.session_state:
+        resolved_key = st.session_state["openai_api_key"]
+
     if not _have_openai or not resolved_key:
         result_data["transcript"] = "OpenAI API Key가 설정되지 않았습니다. 사이드바에 키를 입력하고 '확인 및 적용' 버튼을 눌러주세요."
         return result_data
@@ -396,7 +400,7 @@ if st.sidebar.button("API Key 확인 및 적용"):
     else:
         st.sidebar.error("API Key를 입력해주세요.")
 
-if st.session_state.key_applied:
+if st.session_state.key_applied or st.session_state.openai_api_key:
     st.sidebar.info("🔑 API Key가 적용된 상태입니다.")
 
 st.sidebar.info("""
@@ -464,7 +468,8 @@ with col_rec:
             if wav_bytes is not None:
                 st.session_state.recorded_audio_bytes = wav_bytes
                 with st.spinner("OpenAI Whisper STT 및 음성 분석 진행 중..."):
-                    active_key = st.session_state.get("openai_api_key")
+                    # 텍스트 상자에 입력된 값이나 세션에 있는 키를 직접 가져와 반영
+                    active_key = api_key_input.strip() or st.session_state.get("openai_api_key")
                     analysis_res = analyze_audio_with_whisper(wav_bytes, api_key=active_key)
                     st.session_state.analysis_data = analysis_res
                     st.session_state.user_transcript = analysis_res.get("transcript", "")
