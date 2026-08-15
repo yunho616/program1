@@ -1,4 +1,5 @@
 import base64
+import datetime
 import difflib
 import io
 import math
@@ -307,12 +308,26 @@ st.sidebar.info("""
 if st.session_state.last_error_msg:
     st.error(st.session_state.last_error_msg)
 
-target_sentence = "We need to accelerate our business strategy to expand market share."
+# ---------------------------
+# 일별 학습 지문 동적 로직 설정
+# ---------------------------
+DAILY_SENTENCES = [
+    "We need to accelerate our business strategy to expand market share.",
+    "Innovation and digital transformation are key drivers for sustainable growth.",
+    "Effective communication ensures seamless collaboration across cross-functional teams.",
+    "Data-driven decision making minimizes risks and optimizes operational efficiency.",
+    "Customer feedback provides invaluable insights for continuous product improvement."
+]
+
+# 오늘 날짜 기반으로 순환 선택 (하루마다 지문이 자동으로 변경됨)
+today_str = datetime.date.today().strftime("%Y-%m-%d")
+day_index = abs(hash(today_str)) % len(DAILY_SENTENCES)
+target_sentence = DAILY_SENTENCES[day_index]
 
 col_rec, col_scaff = st.columns([1, 1])
 
 with col_rec:
-    st.markdown("**🎯 오늘의 학습 지문:**")
+    st.markdown(f"**🎯 오늘의 학습 지문 ({today_str}):**")
     st.markdown(f"> \"{target_sentence}\"")
     
     st.subheader("1. 마이크 실시간 녹음")
@@ -429,7 +444,6 @@ with col_scaff:
             for idx, w in enumerate(wrong_words):
                 col_target = cols[idx % len(cols)]
                 with col_target:
-                    # 각 단어별 개별 Latency 수치 계산 (예시 로직)
                     simulated_gap = round(0.4 + (idx * 0.7) + (duration_val * 0.1), 1)
                     if simulated_gap > 3.5:
                         simulated_gap = 2.9
