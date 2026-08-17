@@ -1,7 +1,5 @@
-streamlit
+openai
 numpy
 librosa
 pydub
-imageio-ffmpeg
 nltk
-openai
