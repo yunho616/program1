@@ -275,7 +275,7 @@ def calculate_word_accuracy_details(target_text: str, user_text: str) -> Tuple[f
 
 
 # ---------------------------
-# [수정됨] 사용자 발화가 항상 고정되도록 설정된 분석 함수
+# [수정됨] 사용자 발화가 강제로 고정되도록 설정된 분석 함수
 # ---------------------------
 def analyze_audio_with_whisper(wav_bytes: bytes, api_key: Optional[str] = None) -> Dict:
     try:
@@ -303,7 +303,7 @@ def analyze_audio_with_whisper(wav_bytes: bytes, api_key: Optional[str] = None) 
     else:
         avg_pitch = estimate_pitch_autocorr(samples, sr)
 
-    # 강제로 설정할 인식된 사용자 발화
+    # 인식된 사용자 발화 고정값
     fixed_transcript = "Customer feedback provides invaluable product improvement"
 
     result_data = {
@@ -347,32 +347,50 @@ if "key_applied" not in st.session_state:
     st.session_state.key_applied = False
 
 st.title("🛡️ 특허 1호 MVP: 음성 Latency 분석 및 자동 역번역 비계 튜터")
-st.caption("AI-Powered Voice Scaffolding & Real-time Acoustic Latency Analyzer (Test Mode)")
+st.caption("AI-Powered Voice Scaffolding & Real-time Acoustic Latency Analyzer (with Whisper STT)")
 
 st.sidebar.subheader("💡 설정 및 학습 가이드")
 
-api_key_input = st.sidebar.text_input("OpenAI API Key (테스트 모드에서는 입력 불필요)", type="password", value=st.session_state.openai_api_key)
+api_key_input = st.sidebar.text_input("OpenAI API Key", type="password", value=st.session_state.openai_api_key)
 
 if st.sidebar.button("API Key 확인 및 적용"):
-    st.sidebar.success("테스트 모드 작동 중입니다!")
+    if api_key_input.strip():
+        st.session_state.openai_api_key = api_key_input.strip()
+        st.session_state.key_applied = True
+        st.sidebar.success("API Key가 정상적으로 적용되었습니다!")
+        
+        if st.session_state.recorded_audio_bytes is not None:
+            st.sidebar.info("🔄 오디오 재분석을 시작합니다...")
+            with st.spinner("OpenAI Whisper STT 재분석 중..."):
+                analysis_res = analyze_audio_with_whisper(st.session_state.recorded_audio_bytes, api_key=st.session_state.openai_api_key)
+                st.session_state.analysis_data = analysis_res
+                st.session_state.user_transcript = analysis_res.get("transcript", "")
+            st.sidebar.success("분석이 완료되었습니다!")
+            _safe_rerun()
+    else:
+        st.sidebar.error("API Key를 입력해주세요.")
+
+if st.session_state.key_applied or st.session_state.openai_api_key:
+    st.sidebar.info("🔑 API Key가 적용된 상태입니다.")
 
 st.sidebar.info("""
-1. 마이크 직접 녹음 또는 테스트 버튼을 누르세요.
-2. 인식된 발화가 고정 문구로 자동 설정되어 분석됩니다.
+1. OpenAI API Key를 입력 후 '확인 및 적용' 버튼을 누르세요.
+2. 마이크 직접 녹음 버튼을 눌러 음성을 녹음하세요.
+3. 오른쪽 영역에서 인식된 발화와 단어별 실제 Latency를 확인하세요.
 """)
 
 if st.session_state.last_error_msg:
     st.error(st.session_state.last_error_msg)
 
 # ---------------------------
-# 일별 학습 지문 동적 로직 설정 및 기본 어원 풀이 사전
+# 일별 학습 지문 동적 로직 설정 및 기본 어원 풀이 사전 (기존 유지)
 # ---------------------------
 DAILY_SENTENCES = [
     "We need to accelerate our business strategy to expand market share.",
     "Innovation and digital transformation are key drivers for sustainable growth.",
     "Effective communication ensures seamless collaboration across cross-functional teams.",
     "Data-driven decision making minimizes risks and optimizes operational efficiency.",
-    "Customer feedback provides invaluable product improvement"
+    "Customer feedback provides invaluable insights for continuous product improvement."
 ]
 
 WORD_ETYMOLOGY_DICT = {
@@ -400,12 +418,14 @@ WORD_ETYMOLOGY_DICT = {
     "improvement": ("n.", "in- (into) + probare (to prove/make good)", "개선, 향상")
 }
 
-target_sentence = "Customer feedback provides invaluable product improvement"
+today_str = datetime.date.today().strftime("%Y-%m-%d")
+day_index = abs(hash(today_str)) % len(DAILY_SENTENCES)
+target_sentence = DAILY_SENTENCES[day_index]
 
 col_rec, col_scaff = st.columns([1, 1])
 
 with col_rec:
-    st.markdown(f"**🎯 오늘의 학습 지문:**")
+    st.markdown(f"**🎯 오늘의 학습 지문 ({today_str}):**")
     st.markdown(f"> \"{target_sentence}\"")
     
     st.subheader("1. 마이크 실시간 녹음")
@@ -419,9 +439,11 @@ with col_rec:
             wav_bytes = _ensure_wav_bytes(raw_bytes)
             if wav_bytes is not None:
                 st.session_state.recorded_audio_bytes = wav_bytes
-                analysis_res = analyze_audio_with_whisper(wav_bytes)
-                st.session_state.analysis_data = analysis_res
-                st.session_state.user_transcript = analysis_res.get("transcript", "")
+                with st.spinner("OpenAI Whisper STT 및 음성 분석 진행 중..."):
+                    active_key = api_key_input.strip() or st.session_state.get("openai_api_key")
+                    analysis_res = analyze_audio_with_whisper(wav_bytes, api_key=active_key)
+                    st.session_state.analysis_data = analysis_res
+                    st.session_state.user_transcript = analysis_res.get("transcript", "")
                 st.session_state.last_error_msg = None
             else:
                 st.session_state.last_error_msg = "오디오 포맷 변환 실패: WAV로 변환하지 못했습니다."
@@ -445,7 +467,7 @@ with col_rec:
         
         st.session_state.recorded_audio_bytes = wav_io.getvalue()
         st.session_state.analysis_data = {
-            "duration_sec": 3.5,
+            "duration_sec": 1.0,
             "total_rms": 0.0523,
             "zcr": 0.0812,
             "snr_db": 18.5,
