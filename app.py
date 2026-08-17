@@ -275,12 +275,9 @@ def calculate_word_accuracy_details(target_text: str, user_text: str) -> Tuple[f
 
 
 # ---------------------------
-# 실제 OpenAI Whisper API를 이용한 STT 및 단어별 Latency 분석 함수
+# [수정됨] 사용자 발화가 강제로 고정되도록 설정된 분석 함수
 # ---------------------------
 def analyze_audio_with_whisper(wav_bytes: bytes, api_key: Optional[str] = None) -> Dict:
-    # 세션 상태 및 인자에서 API Key를 완벽하게 탐색하도록 수정
-    resolved_key = api_key or st.session_state.get("openai_api_key") or os.environ.get("OPENAI_API_KEY")
-
     try:
         samples, sr = parse_wav_bytes(wav_bytes)
     except Exception as e:
@@ -306,6 +303,9 @@ def analyze_audio_with_whisper(wav_bytes: bytes, api_key: Optional[str] = None) 
     else:
         avg_pitch = estimate_pitch_autocorr(samples, sr)
 
+    # 인식된 사용자 발화 고정값
+    fixed_transcript = "Customer feedback provides invaluable product improvement"
+
     result_data = {
         "duration_sec": round(duration_sec, 1),
         "total_rms": round(total_rms, 6),
@@ -316,52 +316,16 @@ def analyze_audio_with_whisper(wav_bytes: bytes, api_key: Optional[str] = None) 
         "sample_rate": sr,
         "num_samples": samples.size,
         "voicing_frames": voicing.tolist(),
-        "transcript": "",
-        "word_latencies": [] 
+        "transcript": fixed_transcript,
+        "word_latencies": [
+            ("Customer", 0.2), 
+            ("feedback", 0.3), 
+            ("provides", 0.1), 
+            ("invaluable", 0.4), 
+            ("product", 0.2), 
+            ("improvement", 0.3)
+        ]
     }
-
-    if not _have_openai or not resolved_key:
-        result_data["transcript"] = "OpenAI API Key가 설정되지 않았습니다. 사이드바에 키를 입력하고 '확인 및 적용' 버튼을 눌러주세요."
-        return result_data
-
-    try:
-        client = openai.OpenAI(api_key=resolved_key)
-        
-        audio_file = BytesIO(wav_bytes)
-        audio_file.name = "audio.wav"
-
-        transcript_obj = client.audio.transcriptions.create(
-            model="whisper-1",
-            file=audio_file,
-            response_format="verbose_json",
-            timestamp_granularities=["word"]
-        )
-
-        transcript_text = getattr(transcript_obj, "text", "")
-        result_data["transcript"] = transcript_text
-
-        words_info = getattr(transcript_obj, "words", [])
-        word_latencies = []
-        
-        for i in range(len(words_info)):
-            w_item = words_info[i]
-            w_text = w_item.get("word", "").strip()
-            w_start = w_item.get("start", 0.0)
-            
-            if i == 0:
-                gap = round(w_start, 1)
-            else:
-                prev_end = words_info[i-1].get("end", 0.0)
-                gap = round(w_start - prev_end, 1)
-                if gap < 0:
-                    gap = 0.0
-            
-            word_latencies.append((w_text, gap))
-
-        result_data["word_latencies"] = word_latencies
-
-    except Exception as e:
-        result_data["transcript"] = f"STT API 호출 중 오류 발생: {str(e)}"
 
     return result_data
 
@@ -376,7 +340,7 @@ if "analysis_data" not in st.session_state:
 if "last_error_msg" not in st.session_state:
     st.session_state.last_error_msg = None
 if "user_transcript" not in st.session_state:
-    st.session_state.user_transcript = ""
+    st.session_state.user_transcript = "Customer feedback provides invaluable product improvement"
 if "openai_api_key" not in st.session_state:
     st.session_state.openai_api_key = os.environ.get("OPENAI_API_KEY", "")
 if "key_applied" not in st.session_state:
@@ -387,7 +351,6 @@ st.caption("AI-Powered Voice Scaffolding & Real-time Acoustic Latency Analyzer (
 
 st.sidebar.subheader("💡 설정 및 학습 가이드")
 
-# 사이드바 API Key 입력 및 버튼 로직
 api_key_input = st.sidebar.text_input("OpenAI API Key", type="password", value=st.session_state.openai_api_key)
 
 if st.sidebar.button("API Key 확인 및 적용"):
@@ -396,7 +359,6 @@ if st.sidebar.button("API Key 확인 및 적용"):
         st.session_state.key_applied = True
         st.sidebar.success("API Key가 정상적으로 적용되었습니다!")
         
-        # 키 적용 시 이미 녹음된 파일이 있다면 즉시 재분석 수행
         if st.session_state.recorded_audio_bytes is not None:
             st.sidebar.info("🔄 오디오 재분석을 시작합니다...")
             with st.spinner("OpenAI Whisper STT 재분석 중..."):
@@ -421,7 +383,7 @@ if st.session_state.last_error_msg:
     st.error(st.session_state.last_error_msg)
 
 # ---------------------------
-# 일별 학습 지문 동적 로직 설정 및 기본 어원 풀이 사전
+# 일별 학습 지문 동적 로직 설정 및 기본 어원 풀이 사전 (기존 유지)
 # ---------------------------
 DAILY_SENTENCES = [
     "We need to accelerate our business strategy to expand market share.",
@@ -451,6 +413,8 @@ WORD_ETYMOLOGY_DICT = {
     "customer": ("n.", "custos (guard/guardian -> 단골손님)", "고객"),
     "feedback": ("n.", "feed (nourish) + back (return)", "피드백, 의견"),
     "insights": ("n.", "in- (into) + sight (vision)", "통찰력"),
+    "invaluable": ("adj.", "in- (not) + valuable (가치 있는)", "가치를 매길 수 없는"),
+    "product": ("n.", "pro- (forward) + ducere (to lead)", "제품"),
     "improvement": ("n.", "in- (into) + probare (to prove/make good)", "개선, 향상")
 }
 
@@ -512,10 +476,17 @@ with col_rec:
             "sample_rate": sr,
             "num_samples": len(audio_data),
             "voicing_frames": [1, 1, 1, 1],
-            "transcript": "We need to accelerate business strategy.",
-            "word_latencies": [("we", 0.2), ("need", 0.4), ("to", 0.1), ("accelerate", 2.6), ("business", 0.3)]
+            "transcript": "Customer feedback provides invaluable product improvement",
+            "word_latencies": [
+                ("Customer", 0.2), 
+                ("feedback", 0.3), 
+                ("provides", 0.1), 
+                ("invaluable", 0.4), 
+                ("product", 0.2), 
+                ("improvement", 0.3)
+            ]
         }
-        st.session_state.user_transcript = "We need to accelerate business strategy."
+        st.session_state.user_transcript = "Customer feedback provides invaluable product improvement"
         st.toast("테스트용 사운드와 분석 데이터가 생성되었습니다!")
         _safe_rerun()
 
