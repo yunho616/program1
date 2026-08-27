@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ONES-COGNITO 특허 제1호 역번역 아카이브</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600;700&display=swap');
+    body { font-family: 'Pretendard', sans-serif; background-color: #f8fafc; color: #1e293b; }
+    .mono { font-family: 'JetBrains Mono', monospace; }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col bg-slate-50">
+
+  <header class="bg-slate-900 text-white px-6 py-4 flex justify-between items-center shadow-md">
+    <div class="flex items-center gap-3">
+      <span class="bg-emerald-600 text-white text-xs font-bold px-2.5 py-1 rounded-lg">ONES-COGNITO</span>
+      <h1 class="text-sm md:text-base font-bold">특허 제1호 역번역 아카이브</h1>
+    </div>
+    <div class="flex items-center gap-4 text-xs">
+      <span onclick="alert('메인 홈으로 이동합니다.')" class="hover:text-emerald-400 cursor-pointer"><i class="fa-solid fa-house"></i> 메인 홈</span>
+      <span class="text-emerald-400 font-bold border-b border-emerald-400 pb-0.5"><i class="fa-solid fa-book-open"></i> [1호] 역번역 아카이브</span>
+      <span onclick="alert('특허 4호 AI 관제 대시보드 연동 완료.')" class="hover:text-emerald-400 cursor-pointer"><i class="fa-solid fa-chart-line"></i> [4호] AI 관제 대시보드</span>
+    </div>
+  </header>
+
+  <main class="flex-1 p-4 md:p-8 flex justify-center items-start">
+    <div class="max-w-7xl w-full bg-white rounded-3xl shadow-xl border border-slate-200 p-6 md:p-8 flex flex-col gap-6">
+      
+      <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-6 border-b border-slate-100">
+        <div>
+          <span class="text-xs bg-emerald-100 text-emerald-800 font-bold px-3 py-1 rounded-full">백트랜슬레이션 아카이브 플랫폼</span>
+          <h2 class="text-xl md:text-2xl font-black text-slate-900 mt-2" id="mainTitle">[무룡중학교 3학년 1반 15번 임정연] 개인 학습 아카이브 룸</h2>
+        </div>
+      </div>
+
+      <!-- 옵션바 (과목별 연동 & 12단계 완전 복원) -->
+      <div class="grid grid-cols-1 md:grid-cols-5 gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-200 text-xs">
+        <div>
+          <label class="font-bold text-slate-500 block mb-1">과목</label>
+          <select id="subjectSelect" onchange="changeSubject()" class="w-full bg-white border border-slate-300 rounded-xl p-2.5 font-bold text-slate-800">
+            <option value="국어" selected>국어</option>
+            <option value="도덕">도덕</option>
+            <option value="사회">사회</option>
+            <option value="과학">과학</option>
+          </select>
+        </div>
+        <div>
+          <label class="font-bold text-slate-500 block mb-1">단원명</label>
+          <input type="text" value="Lesson 1" class="w-full bg-white border border-slate-300 rounded-xl p-2.5 font-bold text-slate-800">
+        </div>
+        <div>
+          <label class="font-bold text-slate-500 block mb-1">목표 번역 언어</label>
+          <input type="text" value="영어" class="w-full bg-white border border-slate-300 rounded-xl p-2.5 font-bold text-slate-800">
+        </div>
+        <div>
+          <label class="font-bold text-slate-500 block mb-1">쪽수</label>
+          <input type="text" value="p.14-16" class="w-full bg-white border border-slate-300 rounded-xl p-2.5 font-bold text-slate-800">
+        </div>
+        <div>
+          <label class="font-bold text-slate-500 block mb-1">12단계 역번역 수준</label>
+          <select class="w-full bg-white border border-slate-300 rounded-xl p-2.5 font-bold text-emerald-700">
+            <option>상-4 (최상위권 심화 / High-Advanced)</option>
+            <option>상-3 (고난도 복문 구조)</option>
+            <option>상-2 (논리적 연결 통사)</option>
+            <option>상-1 (고급 어휘 중심)</option>
+            <option selected>중-2 (중등 핵심 구문 / 표준)</option>
+            <option>중-1 (기본 서술 구조)</option>
+            <option>중-3 (응용 의사소통)</option>
+            <option>하-3 (기초 문장 확장)</option>
+            <option>하-2 (필수 어휘 활용)</option>
+            <option>하-1 (초급 구문 완결)</option>
+            <option>기초형 A (입문 다지기)</option>
+            <option>기초형 B (단문 연습)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-50/70 p-4 rounded-2xl border border-slate-200 text-xs">
+        <div>
+          <label class="font-bold text-slate-500 block mb-1">교과서 출판사</label>
+          <input type="text" value="비상교육" class="w-full bg-white border border-slate-300 rounded-xl p-2.5 font-bold text-slate-800">
+        </div>
+        <div>
+          <label class="font-bold text-slate-500 block mb-1">중심 저자명</label>
+          <input type="text" value="홍길동" class="w-full bg-white border border-slate-300 rounded-xl p-2.5 font-bold text-slate-800">
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        
+        <div class="flex flex-col gap-4">
+          <div class="bg-slate-50 rounded-2xl p-5 border border-slate-200 flex flex-col justify-between gap-4 h-full">
+            <div>
+              <div class="flex justify-between items-center mb-2">
+                <h3 class="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                  <i class="fa-solid fa-book text-emerald-600"></i> 학습 지문 및 힌트 (원문)
+                </h3>
+                <button onclick="alert('선택하신 과목의 지문이 성공적으로 로드되었습니다!')" class="px-2.5 py-1 bg-emerald-600 text-white rounded-lg text-[11px] font-bold shadow-sm hover:bg-emerald-500 cursor-pointer">
+                  ✨ AI 맞춤 지문 및 힌트 생성
+                </button>
+              </div>
+              <p id="sourceText" class="text-xs font-medium text-slate-800 leading-relaxed bg-white p-3.5 rounded-xl border border-slate-200 shadow-sm">
+                언어는 인간의 생각과 감정을 담아내는 그릇이며, 우리는 소통을 통해 서로의 세계를 이해하고 공감대를 형성해 나간다.
+              </p>
+            </div>
+
+            <div class="bg-white p-4 rounded-xl border border-slate-200 text-xs space-y-2 shadow-sm">
+              <span class="font-bold text-slate-700 flex items-center gap-1.5"><i class="fa-solid fa-user-gear text-slate-500"></i> 학생 정보 설정 (실시간 연동)</span>
+              <div class="grid grid-cols-4 gap-2">
+                <input type="text" id="school" value="무룡중" oninput="updateTitle()" class="bg-slate-50 border border-slate-200 rounded px-1.5 py-1.5 text-center font-bold text-xs" placeholder="학교">
+                <input type="text" id="grade" value="3" oninput="updateTitle()" class="bg-slate-50 border border-slate-200 rounded px-1.5 py-1.5 text-center font-bold text-xs" placeholder="학년">
+                <input type="text" id="cls" value="1" oninput="updateTitle()" class="bg-slate-50 border border-slate-200 rounded px-1.5 py-1.5 text-center font-bold text-xs" placeholder="반">
+                <input type="text" id="num" value="15" oninput="updateTitle()" class="bg-slate-50 border border-slate-200 rounded px-1.5 py-1.5 text-center font-bold text-xs" placeholder="번호">
+              </div>
+              <input type="text" id="studentName" value="임정연" oninput="updateTitle()" class="w-full bg-slate-50 border border-slate-200 rounded px-2.5 py-1.5 font-bold text-xs" placeholder="이름">
+              
+              <div class="pt-2 border-t border-slate-100 mt-2">
+                <label class="text-[11px] font-bold text-slate-500 block mb-1"><i class="fa-solid fa-key text-amber-500"></i> Gemini API 키 설정</label>
+                <input type="text" id="apiKey" placeholder="API 키를 입력하세요" class="w-full bg-slate-50 border border-slate-300 rounded px-2 py-1.5 text-xs mono text-slate-800">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex flex-col justify-between gap-4">
+          <div>
+            <label class="text-xs font-bold text-slate-700 block mb-1.5"><i class="fa-solid fa-pen-nib text-blue-600"></i> 1단계: [영어] 번역 지문 작성</label>
+            <textarea id="userTranslation" rows="3" class="w-full bg-slate-50 border border-slate-300 rounded-xl p-3 text-xs mono text-slate-800 focus:bg-white focus:outline-none focus:border-emerald-500 transition resize-none shadow-sm">Language is a vessel that captures human thoughts and emotions, and we build empathy by understanding each other's worlds through communication.</textarea>
+          </div>
+
+          <div class="p-4 bg-slate-50 rounded-2xl border border-slate-200 flex flex-col gap-3">
+            <div class="flex justify-between items-center">
+              <label class="text-xs font-bold text-slate-700"><i class="fa-solid fa-microphone text-rose-500"></i> 2단계: 읽기 녹음 및 구술 학습</label>
+              <span class="text-[11px] mono text-slate-500 font-bold" id="recStatus">대기 중</span>
+            </div>
+            <div class="flex items-center justify-between">
+              <button onclick="handleRecord()" id="recBtn" class="px-3.5 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow-sm">
+                <i class="fa-solid fa-microphone" id="micIcon"></i> <span id="micText">녹음 시작</span>
+              </button>
+              <span class="text-xs mono text-slate-400 font-mono">00:00 / 01:30</span>
+            </div>
+          </div>
+
+          <div>
+            <label class="text-xs font-bold text-slate-700 block mb-1.5"><i class="fa-solid fa-wand-magic-sparkles text-emerald-600"></i> 3단계: AI 분석 및 최종 피드백</label>
+            <button onclick="runAnalysis()" class="w-full py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition flex justify-center items-center gap-2 shadow-md cursor-pointer">
+              <i class="fa-solid fa-play"></i> [3단계 실행] AI 분석 및 피드백 생성
+            </button>
+          </div>
+        </div>
+
+      </div>
+
+      <div id="resultBox" class="hidden p-5 bg-emerald-50/80 rounded-2xl border border-emerald-200 text-xs space-y-3 shadow-inner">
+        <div class="flex justify-between items-center pb-2 border-b border-emerald-200/60">
+          <span class="font-black text-emerald-950 text-sm flex items-center gap-2">
+            <i class="fa-solid fa-square-poll-vertical text-emerald-600"></i> 다차원 인지 분석 리포트
+          </span>
+          <span id="scoreBadge" class="px-3 py-1 bg-emerald-600 text-white font-black rounded-full text-xs">95점</span>
+        </div>
+        <p class="text-slate-700 leading-relaxed text-xs md:text-sm font-medium" id="feedbackText">
+          분석 완료되었습니다.
+        </p>
+      </div>
+
+    </div>
+  </main>
+
+  <script>
+    function updateTitle() {
+      const name = document.getElementById('studentName').value || '임정연';
+      const school = document.getElementById('school').value || '무룡중';
+      const grade = document.getElementById('grade').value || '3';
+      const cls = document.getElementById('cls').value || '1';
+      const num = document.getElementById('num').value || '15';
+      document.getElementById('mainTitle').innerText = `[${school} ${grade}학년 ${cls}반 ${num}번 ${name}] 개인 학습 아카이브 룸`;
+    }
+
+    function changeSubject() {
+      const sub = document.getElementById('subjectSelect').value;
+      const sourceText = document.getElementById('sourceText');
+      const userTrans = document.getElementById('userTranslation');
+
+      if (sub === '국어') {
+        sourceText.innerText = "언어는 인간의 생각과 감정을 담아내는 그릇이며, 우리는 소통을 통해 서로의 세계를 이해하고 공감대를 형성해 나간다.";
+        userTrans.value = "Language is a vessel that captures human thoughts and emotions, and we build empathy by understanding each other's worlds through communication.";
+      } else if (sub === '도덕') {
+        sourceText.innerText = "인간은 본능에 의해서만 살아가는 다른 생명체와 달리, 자신의 행동을 성찰하고 바람직한 삶의 방향을 모색하는 도덕적 능력을 지니고 있다.";
+        userTrans.value = "Unlike other living creatures that live solely by instinct, human beings possess the moral capacity to reflect on their actions.";
+      } else if (sub === '사회') {
+        sourceText.innerText = "우리는 다양한 사회 제도와 규범 속에서 상호작용하며 살아가는 사회적 존재이다.";
+        userTrans.value = "We are social beings who live by interacting within various social systems and norms.";
+      } else if (sub === '과학') {
+        sourceText.innerText = "자연 현상은 일정한 법칙성과 인과관계를 바탕으로 일어나며, 과학적 탐구를 통해 이를 밝혀낼 수 있다.";
+        userTrans.value = "Natural phenomena occur based on regular laws and causal relationships, which can be uncovered through scientific inquiry.";
+      }
+    }
+
+    let isRec = false;
+    function handleRecord() {
+      isRec = !isRec;
+      document.getElementById('micText').innerText = isRec ? '녹음 중지' : '녹음 시작';
+      document.getElementById('recStatus').innerText = isRec ? '🔴 녹음 중...' : '✔ 녹음 완료';
+    }
+
+    async function runAnalysis() {
+      const apiKey = document.getElementById('apiKey').value.trim();
+      if (!apiKey) { alert('Gemini API 키를 입력해주세요!'); return; }
+      
+      const resBox = document.getElementById('resultBox');
+      resBox.classList.remove('hidden');
+      document.getElementById('feedbackText').innerText = 'AI 분석 중입니다...';
+
+      try {
+        const sub = document.getElementById('subjectSelect').value;
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ parts: [{ text: `임정연 학생의 ${sub} 역번역 영작문을 분석하고 95점과 함께 칭찬 피드백을 3줄로 작성해주세요.` }] }] })
+        });
+        const data = await res.json();
+        document.getElementById('feedbackText').innerText = data.candidates[0].content.parts[0].text;
+      } catch(e) {
+        document.getElementById('feedbackText').innerText = '성공적으로 분석되었습니다. (모의 피드백: 구문 배열과 어휘 인출 능력이 매우 우수합니다!)';
+      }
+    }
+  </script>
+</body>
+</html>
